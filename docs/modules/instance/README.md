@@ -70,8 +70,10 @@ se rechazan `:`, comilla simple, `&`, `/`, backslash, `<` y `>`. Las opciones
 del message broker se guardan en un configfile temporal 0600, no en argv. El
 script de referencia interpola algunos valores en sustituciones `sed`; por
 seguridad se rechazan `/`, `&`, backslash y saltos de línea en credenciales y
-campos de texto del broker. El módulo no expone opciones SMTP; configúrelas por
-los mecanismos globales de Koha o mediante `configfile`. Añada `no_log: true`
+campos de texto del broker. El módulo no expone opciones SMTP; configure el
+correo de una instancia creada mediante [`jmz.koha.smtp`](../smtp/README.md).
+Las opciones SMTP nativas de `koha-create` siguen disponibles para bootstrap,
+pero no son el mecanismo de reconfiguración posterior. Añada `no_log: true`
 a tareas con secretos.
 
 ### Configuración y precedencia

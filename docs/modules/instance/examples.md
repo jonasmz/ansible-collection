@@ -73,8 +73,9 @@ Con estos valores, los nombres calculados son `biblioteca.example.org` para el
 OPAC y `biblioteca-admin.example.org` para el personal. La contraseña del
 broker se escribe en un configfile privado temporal, no en argv. Si omites
 `message_broker`, Koha conserva sus valores globales o predeterminados. El
-módulo no ofrece opciones SMTP; configura el correo saliente en los ajustes
-globales de Koha o en un `configfile` administrado por separado.
+el módulo no administra SMTP durante el ciclo de vida; configura el correo de
+la instancia ya creada con [`jmz.koha.smtp`](../smtp/README.md). `koha-create`
+conserva sus opciones nativas de SMTP para el bootstrap inicial.
 
 `opac_port` y `staff_port` configuran los puertos de los VirtualHost. No
 configuran la dirección IP de escucha de Apache. El módulo actualmente no

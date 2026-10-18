@@ -2,8 +2,8 @@
 
 El playbook [playbooks/integration.yml](../playbooks/integration.yml) crea
 `codexqa26` como instancia de QA aislada, la inicializa con un superlibrarian,
-construye los índices iniciales y habilita Plack, Zebra, el indexador y ambas
-colas de workers. No borra instancias preexistentes. El password Koha se
+configura SMTP sin enviar mensajes, construye los índices iniciales y habilita
+Plack, Zebra, el indexador y ambas colas de workers. No borra instancias preexistentes. El password Koha se
 solicita de forma privada en tiempo de ejecución y no se escribe en el repo.
 El playbook habilita `rewrite` y `cgi` y recarga Apache antes de crear el sitio
 si esos módulos aún están deshabilitados.
@@ -39,8 +39,10 @@ Solicita el password inicial del superlibrarian dos veces, sin eco. El login es
 `superlibrarian`; el password es el ingresado en ese prompt. Las URL se
 construyen con DNS wildcard `sslip.io` para apuntar al IP de la VM.
 
-La prueba ejecuta los siete módulos: `instance`, `initialize`, `plack`,
-`zebra`, `zebra_rebuild`, `worker` y `zebra_indexer`. Repite las tareas
+La prueba ejecuta los ocho módulos: `instance`, `initialize`, `smtp`, `plack`,
+`zebra`, `zebra_rebuild`, `worker` y `zebra_indexer`. SMTP usa `localhost`, no
+contacta un proveedor, actualiza la preferencia QA, verifica idempotencia y
+deja el correo deshabilitado. Repite las tareas
 declarativas para comprobar idempotencia y exige respuesta HTTP del vhost de
 personal. `zebra_rebuild` es una operación de escritura intencional que crea
 los índices iniciales; no se repite porque no es idempotente.
