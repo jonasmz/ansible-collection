@@ -30,6 +30,7 @@ Consulte el [índice de módulos](modules/README.md) para ver su interfaz, compo
 | --- | --- | --- | --- |
 | [`jmz.koha.instance`](modules/instance/README.md) | Crear, configurar, inspeccionar, reparar o eliminar una instancia Koha. | [Guía](modules/instance/README.md) | [Escenarios](modules/instance/examples.md) |
 | [`jmz.koha.plack`](modules/plack/README.md) | Administrar el daemon Plack y su habilitación por separado. | [Guía](modules/plack/README.md) | [Escenarios](modules/plack/examples.md) |
+| [`jmz.koha.initialize`](modules/initialize/README.md) | Inicializar la base Koha y el onboarding sin el instalador web. | [Guía](modules/initialize/README.md) | [Escenarios](modules/initialize/examples.md) |
 
 ## Compatibilidad
 

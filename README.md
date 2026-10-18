@@ -2,7 +2,7 @@
 
 Colección Ansible para automatizar instancias de Koha ILS instaladas desde paquetes Debian o Ubuntu.
 
-La colección incluye módulos para crear y administrar instancias Koha y controlar su daemon Plack. Requiere `ansible-core >= 2.15` y que los comandos Koha estén instalados en el host administrado.
+La colección incluye módulos para administrar instancias Koha, controlar Plack e inicializar la aplicación y su onboarding. Requiere `ansible-core >= 2.15` y que los comandos Koha estén instalados en el host administrado.
 
 ## Documentación
 
