@@ -214,7 +214,6 @@ import json
 import os
 import pwd
 import re
-import shlex
 import stat
 import fcntl
 import subprocess
@@ -226,6 +225,7 @@ from ansible.module_utils.basic import AnsibleModule
 
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,10}$")
+LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.(?:sql|yml)$")
 PROTOCOL = 1
 STATES = {"uninitialized", "schema_created", "data_incomplete", "onboarding_required", "initialized", "inconsistent", "upgrade_required"}
@@ -251,6 +251,8 @@ def _validate_params(module):
     for required in ("language", "marc_flavour", "library", "patron_categories", "administrator", "item_types", "circulation_rules"):
         if p.get(required) is None:
             raise InitializeError("%s es obligatorio cuando state=present" % required)
+    if not LANGUAGE_RE.fullmatch(p["language"]):
+        raise InitializeError("language debe ser un identificador BCP 47 simple, por ejemplo en o es-ES")
     lib = p["library"]
     if not CODE_RE.fullmatch(lib["code"]):
         raise InitializeError("library.code debe contener entre 1 y 10 caracteres alfanuméricos, guion o guion bajo")
@@ -376,7 +378,13 @@ def main():
             raise InitializeError("No se encontró el helper Perl temporal de la colección")
         if not (os.stat(helper).st_mode & stat.S_IRUSR):
             raise InitializeError("El helper Perl no es legible")
-        shell_command = "perl %s" % shlex.quote(helper)
+        # koha-shell wraps its -c value in single quotes before passing it to
+        # the instance shell, so a shell-quoted path would break that wrapper.
+        # The action plugin stages this file under an absolute, whitespace-free
+        # Ansible temp path; reject anything outside that narrow safe alphabet.
+        if not re.fullmatch(r"/[A-Za-z0-9._/-]+", helper):
+            raise InitializeError("La ruta del helper contiene caracteres de shell no admitidos")
+        shell_command = "perl %s" % helper
         command = [koha_shell, instance, "-c", shell_command]
 
         # flock is released automatically on process exit, including abrupt failure.

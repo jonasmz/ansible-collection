@@ -110,6 +110,12 @@ class InitializeModuleTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.InitializeError, "sample_data"):
             self.module._validate_params(fake)
 
+    def test_language_code_rejects_path_traversal(self):
+        fake = FakeAnsibleModule()
+        fake.params["language"] = "../../etc"
+        with self.assertRaisesRegex(self.module.InitializeError, "language"):
+            self.module._validate_params(fake)
+
     def test_inspect_does_not_require_onboarding_inputs(self):
         fake = FakeAnsibleModule()
         fake.params = {"instance": "biblioteca", "state": "inspect"}

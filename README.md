@@ -18,5 +18,6 @@ La colección incluye módulos para crear y administrar instancias Koha, control
 - [Escenarios de `jmz.koha.zebra_rebuild`](docs/modules/zebra_rebuild/examples.md): coordinación con servicios Koha, check mode e integración.
 - [Guía de `jmz.koha.worker`](docs/modules/worker/README.md): administración de workers de background jobs y su habilitación.
 - [Escenarios de `jmz.koha.worker`](docs/modules/worker/examples.md): configuración y administración de workers por escenario.
+- [Prueba de integración completa](docs/integration-test.md): playbook de referencia para provisionar y validar los módulos juntos.
 
 Instale la colección con `ansible-galaxy collection install jmz.koha`.
