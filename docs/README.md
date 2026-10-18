@@ -30,6 +30,9 @@ Consulte el [índice de módulos](modules/README.md) para ver su interfaz, compo
 | --- | --- | --- | --- |
 | [`jmz.koha.instance`](modules/instance/README.md) | Crear, configurar, inspeccionar, reparar o eliminar una instancia Koha. | [Guía](modules/instance/README.md) | [Escenarios](modules/instance/examples.md) |
 | [`jmz.koha.plack`](modules/plack/README.md) | Administrar el daemon Plack y su habilitación por separado. | [Guía](modules/plack/README.md) | [Escenarios](modules/plack/examples.md) |
+| [`jmz.koha.zebra`](modules/zebra/README.md) | Administrar el servicio Zebra de una instancia. | [Guía](modules/zebra/README.md) | [Escenarios](modules/zebra/examples.md) |
+| [`jmz.koha.zebra_indexer`](modules/zebra_indexer/README.md) | Administrar el daemon de indexación incremental Zebra de una instancia. | [Guía](modules/zebra_indexer/README.md) | [Escenarios](modules/zebra_indexer/examples.md) |
+| [`jmz.koha.zebra_rebuild`](modules/zebra_rebuild/README.md) | Ejecutar actualizaciones incrementales y reconstrucciones puntuales de índices Zebra. | [Guía](modules/zebra_rebuild/README.md) | [Escenarios](modules/zebra_rebuild/examples.md) |
 
 ## Compatibilidad
 
