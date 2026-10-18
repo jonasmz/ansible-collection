@@ -2,6 +2,9 @@
 
 Manage the Plack daemon and Plack enablement for one Koha instance. The module requires the Koha package that provides `koha-plack` on the managed host. Use `become: true` for lifecycle or enablement changes; Koha's service and Apache configuration are normally managed as root.
 
+[Module index](../README.md) · [General guide](../../README.md) ·
+[Usage scenarios](examples.md)
+
 ## Parameters
 
 | Parameter | Type | Required | Values | Description |
@@ -22,62 +25,11 @@ Check mode performs read-only status and configuration queries, reports planned 
 
 The module fails if the instance configuration is missing, the daemon status cannot be interpreted, or OPAC and intranet Plack includes disagree. It does not silently treat unknown status output as stopped.
 
-## Examples
+## Usage examples
 
-```yaml
-- name: Start Plack
-  jmz.koha.plack:
-    instance: biblioteca
-    state: started
-  become: true
-
-- name: Stop Plack
-  jmz.koha.plack:
-    instance: biblioteca
-    state: stopped
-  become: true
-
-- name: Restart or gracefully reload Plack
-  jmz.koha.plack:
-    instance: biblioteca
-    state: reloaded
-  become: true
-
-- name: Enable Plack without starting the daemon
-  jmz.koha.plack:
-    instance: biblioteca
-    enabled: true
-  become: true
-
-- name: Enable Plack and start its daemon
-  jmz.koha.plack:
-    instance: biblioteca
-    enabled: true
-    state: started
-  become: true
-
-- name: Disable and stop Plack
-  jmz.koha.plack:
-    instance: biblioteca
-    enabled: false
-    state: stopped
-  become: true
-
-- name: Query state without changing the host
-  jmz.koha.plack:
-    instance: biblioteca
-    state: status
-  register: biblioteca_plack
-
-- name: Start Plack for multiple instances
-  jmz.koha.plack:
-    instance: "{{ item }}"
-    state: started
-  loop:
-    - biblioteca
-    - archivo
-  become: true
-```
+See [examples.md](examples.md) for scenario-based playbook snippets covering
+service lifecycle, enablement, combined requests, observation, loops, and
+check mode.
 
 ## Return values
 
