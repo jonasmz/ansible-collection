@@ -19,6 +19,10 @@ No instala Koha ni servicios, no configura HAProxy y no completa el onboarding.
   become: true
 ```
 
+Consulta [docs/examples.md](docs/examples.md) para ejemplos de todos los flujos
+del módulo: modos de base de datos, vhosts/HAProxy, secretos, check mode,
+Let's Encrypt local, reparación, reconfiguración y borrado con confirmación.
+
 Instalación en el controlador: `ansible-galaxy collection install jmz.koha`.
 Requiere Ansible Core 2.15+; el objetivo del proyecto es 2.19+. Ejecute en el
 host Koha con `become: true`.
@@ -69,12 +73,14 @@ crear y se deshabilitaron y recargaron al terminar. `mpm_itk` ya estaba activo.
 (`instancia:usuario:contraseña:basedatos:host`) y no se combina con
 `passwdfile`. Las filas de `passwdfile` se validan para el nombre solicitado.
 El backend interpola estas credenciales en SQL sin escape: el
-username debe ser `[A-Za-z0-9_]{1,32}` y la contraseña
-`[A-Za-z0-9_.+-]{1,128}`. SMTP y message broker se guardan en configfile temporal 0600, no
-en argv. El script de referencia interpola algunos valores en sustituciones
-`sed`; por seguridad se rechazan `/`, `&`, backslash y saltos de línea en
-credenciales y campos de texto SMTP/broker. Añada `no_log: true` a tareas con
-secretos.
+username debe ser `[A-Za-z0-9_]{1,32}`. La contraseña admite de 1 a 128
+caracteres ASCII imprimibles sin espacios, incluidos símbolos como `!`, `@`,
+`#`, `%` y `$`; por las interpolaciones sin escape del `koha-create` nativo,
+se rechazan `:`, comilla simple, `&`, `/`, backslash, `<` y `>`. SMTP y
+message broker se guardan en configfile temporal 0600, no en argv. El script de
+referencia interpola algunos valores en sustituciones `sed`; por seguridad se
+rechazan `/`, `&`, backslash y saltos de línea en credenciales y campos de
+texto SMTP/broker. Añada `no_log: true` a tareas con secretos.
 
 ### Configuración y precedencia
 
@@ -97,6 +103,13 @@ con datos de origen no confiable.
 | `smtp.*`, `message_broker.*` | Opciones `--smtp-*`, `--mb-*`; omitidas si no se definen. No gestionan servicios externos. |
 | `keep_cookies` | Repetición de `--keep-cookie`, serializada como array `KEEP_COOKIE`. |
 | `vhosts.*` | Variables `DOMAIN`, `OPACPORT`, `OPACPREFIX`, `OPACSUFFIX`, `INTRAPORT`, `INTRAPREFIX`, `INTRASUFFIX`. Si se omite, hereda `koha-sites.conf`. |
+
+`opac_port` y `staff_port` controlan el puerto del VirtualHost, no la IP de
+escucha de Apache. La dirección de escucha no está expuesta por este módulo;
+Apache la determina según su plantilla/configuración global del host.
+
+`marcflavor` no distingue mayúsculas: `MARC21`, `Marc21` y `marc21` se
+normalizan a `marc21` antes de validar o guardar el estado.
 
 No se exponen `--help`, `--auth-idx` ni `--biblio-idx`. Las dos últimas aparecen
 en getopt de la referencia, pero no se encontró procesamiento funcional.
