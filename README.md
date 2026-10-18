@@ -2,12 +2,14 @@
 
 Colección Ansible para automatizar instancias de Koha ILS instaladas desde paquetes Debian o Ubuntu.
 
-La colección incluye módulos para crear y administrar instancias Koha y controlar sus servicios Plack, worker y Zebra. Requiere `ansible-core >= 2.15` y que los comandos Koha estén instalados en el host administrado.
+La colección incluye módulos para crear y administrar instancias Koha, controlar sus servicios Plack, worker y Zebra, e inicializar la aplicación y su onboarding. Requiere `ansible-core >= 2.15` y que los comandos Koha estén instalados en el host administrado.
 
 ## Documentación
 
 - [Guía general](docs/README.md): instalación, requisitos y navegación de la documentación.
 - [Índice de módulos](docs/modules/README.md): descripción, interfaz y enlaces a la documentación general y ejemplos Markdown de cada módulo.
+- [Guía de `jmz.koha.initialize`](docs/modules/initialize/README.md): inicialización de la base Koha y onboarding sin el instalador web.
+- [Escenarios de `jmz.koha.initialize`](docs/modules/initialize/examples.md): playbooks para inicialización y configuración inicial.
 - [Guía de `jmz.koha.zebra`](docs/modules/zebra/README.md): ciclo de vida Zebra, enablement por backend y resultados.
 - [Escenarios de `jmz.koha.zebra`](docs/modules/zebra/examples.md): playbooks por escenario y estrategia de integración.
 - [Guía de `jmz.koha.zebra_indexer`](docs/modules/zebra_indexer/README.md): ciclo de vida del indexador incremental y compatibilidad por backend.
