@@ -38,6 +38,7 @@ usar `no_log: true`.
       cardnumber: ADMIN001
       library: CENTRAL
       category: STAFF
+      email: "{{ vault_koha_admin_email }}"
       password: "{{ vault_koha_admin_password }}"
     item_types:
       - code: BOOK

@@ -70,6 +70,7 @@ options:
       cardnumber: {description: Número de tarjeta., type: str, required: true}
       library: {description: Código de biblioteca existente., type: str, required: true}
       category: {description: Código de una categoría de personal tipo S., type: str, required: true}
+      email: {description: Correo opcional del administrador; si la cuenta existente no tiene correo se completa, y si ya tiene otro valor se reporta conflicto., type: str}
       password: {description: Contraseña inicial, validada y almacenada por Koha. No se rota en cuentas existentes., type: str, required: true, no_log: true}
   item_types:
     description: Uno o más tipos de material iniciales; los existentes deben coincidir en descripción.
@@ -122,6 +123,7 @@ EXAMPLES = r'''
       cardnumber: ADMIN001
       library: CENTRAL
       category: STAFF
+      email: "{{ vault_koha_admin_email }}"
       password: "{{ vault_koha_admin_password }}"
     item_types:
       - code: BOOK
@@ -345,6 +347,7 @@ def main():
                 username=dict(type="str", required=True), firstname=dict(type="str", required=True),
                 surname=dict(type="str", required=True), cardnumber=dict(type="str", required=True),
                 library=dict(type="str", required=True), category=dict(type="str", required=True),
+                email=dict(type="str"),
                 password=dict(type="str", required=True, no_log=True),
             )),
             item_types=dict(type="list", elements="dict", options=dict(code=dict(type="str", required=True), description=dict(type="str", required=True))),

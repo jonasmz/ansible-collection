@@ -33,12 +33,12 @@ class KohaInstanceHelpersTest(unittest.TestCase):
         ki.validate_params(params(db_mode="use", database="koha_biblioteca", db_credentials={"username": "u", "password": "p"}))
 
     def test_option_validation(self):
-        for invalid in ({"marcflavor": "none"}, {"zebralang": "xx"}, {"smtp": {"ssl_mode": "tls"}}, {"sru_port": 65536}):
+        for invalid in ({"marcflavor": "none"}, {"zebralang": "xx"}, {"sru_port": 65536}):
             with self.subTest(invalid=invalid), self.assertRaises(ki.ModuleInputError):
                 ki.validate_params(params(**invalid))
 
     def test_omitted_optional_groups_may_be_none(self):
-        ki.validate_params(params(smtp=None, message_broker=None, vhosts=None, db_credentials=None))
+        ki.validate_params(params(message_broker=None, vhosts=None, db_credentials=None))
 
     def test_credentials_conflict_and_mode(self):
         with self.assertRaises(ki.ModuleInputError):
@@ -60,8 +60,8 @@ class KohaInstanceHelpersTest(unittest.TestCase):
         ki.validate_params(params(letsencrypt=True, tls_termination="local"))
 
     def test_config_quotes_values_and_rejects_newlines(self):
-        rendered = ki.render_config(params(vhosts={"domain": ".example.org", "opac_prefix": "x"}, smtp={"password": "p;ass $word"}))
-        self.assertIn("CLO_SMTP_PASSWORD='p;ass $word'", rendered)
+        rendered = ki.render_config(params(vhosts={"domain": ".example.org", "opac_prefix": "x"}))
+        self.assertNotIn("CLO_SMTP_", rendered)
         with self.assertRaises(ki.ModuleInputError):
             ki.validate_params(params(vhosts={"domain": ".example.org", "opac_prefix": "$(touch pwned)"}))
         with self.assertRaises(ki.ModuleInputError):

@@ -87,7 +87,7 @@ def validate_params(p):
         raise ModuleInputError("db_request_path debe ser una ruta absoluta del nodo remoto")
     if p.get("sru_port") is not None and not 1 <= p["sru_port"] <= 65535:
         raise ModuleInputError("sru_port debe estar entre 1 y 65535")
-    for group, fields in (("smtp", ("port", "timeout")), ("message_broker", ("port",))):
+    for group, fields in (("message_broker", ("port",)),):
         for field in fields:
             value = (p.get(group) or {}).get(field)
             if value is not None and value < 1:
@@ -96,8 +96,6 @@ def validate_params(p):
         raise ModuleInputError("marcflavor debe ser marc21 o unimarc; koha-create no admite none en la versión de referencia")
     if p.get("zebralang") not in (None, "cs", "el", "en", "es", "fr", "nb", "ru", "uk"):
         raise ModuleInputError("zebralang no está admitido por la versión de referencia de koha-create")
-    if (p.get("smtp") or {}).get("ssl_mode") not in (None, "disabled", "ssl", "starttls"):
-        raise ModuleInputError("smtp.ssl_mode debe ser disabled, ssl o starttls")
     if p.get("memcached_servers") and not all(re.fullmatch(r"[A-Za-z0-9_.:-]+", s) for s in p["memcached_servers"]):
         raise ModuleInputError("memcached_servers solo admite host:puerto con caracteres seguros")
     if p.get("memcached_prefix") and any(ch in p["memcached_prefix"] for ch in ("/", "&", "\\", "\r", "\n")):
@@ -114,7 +112,7 @@ def validate_params(p):
             raise ModuleInputError("%s contiene caracteres no seguros para la plantilla de koha-create" % key)
     if p.get("passwdfile") and re.search(r"\s", p["passwdfile"]):
         raise ModuleInputError("passwdfile no puede contener espacios; el script instalado expande esa ruta sin comillas")
-    for group, fields in (("smtp", ("host", "username", "password")), ("message_broker", ("host", "username", "password", "vhost"))):
+    for group, fields in (("message_broker", ("host", "username", "password", "vhost")),):
         for field in fields:
             value = (p.get(group) or {}).get(field)
             # Upstream expands these variables into sed replacement strings.
@@ -143,8 +141,10 @@ def config_values(p, request_passwdfile=None):
     if v:
         # koha-create may render an invalid *:None vhost if either port is
         # absent from koha-sites.conf. Default both public sites to HTTP.
-        values.setdefault("OPACPORT", 80)
-        values.setdefault("INTRAPORT", 80)
+        if values.get("OPACPORT") is None:
+            values["OPACPORT"] = 80
+        if values.get("INTRAPORT") is None:
+            values["INTRAPORT"] = 80
     # CLO_* variables are applied after the configfile by the script and give
     # these explicit module parameters precedence over global Koha settings.
     mapping = {
@@ -168,15 +168,6 @@ def config_values(p, request_passwdfile=None):
         values["ENABLE_SRU"] = "yes"
     if p.get("sru_port") is not None:
         values["SRU_SERVER_PORT"] = p["sru_port"]
-    smtp = p.get("smtp") or {}
-    smap = {"host": "CLO_SMTP_HOST", "port": "CLO_SMTP_PORT", "timeout": "CLO_SMTP_TIMEOUT",
-            "ssl_mode": "CLO_SMTP_SSL_MODE", "username": "CLO_SMTP_USER_NAME",
-            "password": "CLO_SMTP_PASSWORD"}
-    for source, dest in smap.items():
-        if smtp.get(source) is not None:
-            values[dest] = smtp[source]
-    if smtp.get("debug") is not None:
-        values["CLO_SMTP_DEBUG"] = "1" if smtp["debug"] else "0"
     broker = p.get("message_broker") or {}
     bmap = {"host": "CLO_MESSAGE_BROKER_HOST", "port": "CLO_MESSAGE_BROKER_PORT",
             "username": "CLO_MESSAGE_BROKER_USER", "password": "CLO_MESSAGE_BROKER_PASS",
