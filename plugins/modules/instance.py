@@ -28,7 +28,7 @@ options:
     choices: [create, request, populate, use]
     default: create
   marcflavor:
-    description: Mapea --marcflavor; la referencia admite marc21 o unimarc.
+    description: Mapea --marcflavor; acepta mayúsculas/minúsculas y normaliza a minúsculas. Valores admitidos marc21 o unimarc.
     type: str
     choices: [marc21, unimarc]
   zebralang:
@@ -278,14 +278,14 @@ import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import (
-    ModuleInputError, build_argv, inspect_state, render_config, validate_params,
+    ModuleInputError, build_argv, db_password_is_safe, inspect_state, normalize_marcflavor, render_config, validate_params,
 )
 
 
 ARGUMENT_SPEC = {
     "name": {"type": "str", "required": True}, "state": {"type": "str", "default": "present", "choices": ["present", "absent"]},
     "db_mode": {"type": "str", "default": "create", "choices": ["create", "request", "populate", "use"]},
-    "marcflavor": {"type": "str", "choices": ["marc21", "unimarc"]},
+    "marcflavor": {"type": normalize_marcflavor, "choices": ["marc21", "unimarc"]},
     "zebralang": {"type": "str", "choices": ["cs", "el", "en", "es", "fr", "nb", "ru", "uk"]},
     "elasticsearch_server": {"type": "str"}, "memcached_servers": {"type": "list", "elements": "str"},
     "memcached_prefix": {"type": "str"}, "memcached_enabled": {"type": "bool"}, "enable_sru": {"type": "bool", "default": False},
@@ -347,7 +347,7 @@ def _existing_db_credentials(config_path, name):
     host = value("hostname") or "localhost"
     if (not all((username, password, database)) or any("\n" in x or ":" in x for x in (username, password, database, host))
             or not re.fullmatch(r"[A-Za-z0-9_]{1,32}", username)
-            or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,128}", password)
+            or not db_password_is_safe(password)
             or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", database)
             or not re.fullmatch(r"[A-Za-z0-9_.:\[\]-]+", host)):
         raise ModuleInputError("no se pudieron recuperar credenciales DB seguras del koha-conf.xml; proporcione db_credentials/passwdfile")
@@ -365,7 +365,7 @@ def _read_passwd_record(path, name):
         raise ModuleInputError("passwdfile debe tener exactamente una fila Koha para name con cinco campos")
     instance, username, password, database, host = rows[0]
     if (instance != name or not re.fullmatch(r"[A-Za-z0-9_]{1,32}", username)
-            or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,128}", password)
+            or not db_password_is_safe(password)
             or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", database)
             or not re.fullmatch(r"[A-Za-z0-9_.:\[\]-]+", host)):
         raise ModuleInputError("passwdfile contiene valores no soportados de forma segura por koha-create")
@@ -444,7 +444,7 @@ def main():
                 if v.get(key) and not re.fullmatch(r"[A-Za-z0-9-]*", v[key]):
                     raise ModuleInputError("vhosts.%s solo admite caracteres DNS seguros" % key)
             for key in ("opac_port", "staff_port"):
-                if key in v and not 1 <= v[key] <= 65535:
+                if v.get(key) is not None and not 1 <= v[key] <= 65535:
                     raise ModuleInputError("vhosts.%s debe estar entre 1 y 65535" % key)
         if p.get("keep_cookies") and not all(re.fullmatch(r"[A-Za-z0-9_-]+", x) for x in p["keep_cookies"]):
             raise ModuleInputError("keep_cookies solo admite nombres de cookie alfanuméricos, _ y -")
@@ -452,8 +452,8 @@ def main():
             creds = p["db_credentials"]
             if not creds["username"] or not creds["password"] or any(c in creds["username"] + creds["password"] for c in ":\r\n"):
                 raise ModuleInputError("db_credentials requiere username/password sin dos puntos ni saltos de línea (formato passwdfile Koha)")
-            if not re.fullmatch(r"[A-Za-z0-9_]{1,32}", creds["username"]) or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,128}", creds["password"]):
-                raise ModuleInputError("db_credentials admite username [A-Za-z0-9_]{1,32} y password [A-Za-z0-9_.+-]{1,128}; Koha interpola estos valores en SQL sin escape")
+            if not re.fullmatch(r"[A-Za-z0-9_]{1,32}", creds["username"]) or not db_password_is_safe(creds["password"]):
+                raise ModuleInputError("db_credentials requiere username [A-Za-z0-9_]{1,32}; password de 1-128 caracteres ASCII imprimibles sin espacios. Por seguridad de koha-create no se admiten : ' & / \\ < >")
         if mode == "request" and os.path.exists(request_path):
             raise ModuleInputError("db_request_path ya existe; se conserva para no sobrescribir una solicitud con credenciales")
         if mode == "populate" and not p.get("db_request_path"):

@@ -11,6 +11,8 @@ import json
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
 DB_RE = re.compile(r"^[A-Za-z0-9_]+$")
+DB_PASSWORD_RE = re.compile(r"^[\x21-\x7e]{1,128}$")
+DB_PASSWORD_UNSAFE = ":'&\\<>/"
 SAFE_SHELL_VALUE_RE = re.compile(r"^[^\x00\r\n]*$")
 
 
@@ -18,7 +20,24 @@ class ModuleInputError(ValueError):
     pass
 
 
+def normalize_marcflavor(value):
+    """Normalize MARC flavor names for Koha's lowercase CLI values."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("marcflavor debe ser texto")
+    return value.lower()
+
+
+def db_password_is_safe(value):
+    """Check the printable password subset safe for koha-create's SQL/XML/sed use."""
+    return (isinstance(value, str) and DB_PASSWORD_RE.fullmatch(value) is not None
+            and not any(char in value for char in DB_PASSWORD_UNSAFE))
+
+
 def validate_params(p):
+    if p.get("marcflavor") is not None:
+        p["marcflavor"] = normalize_marcflavor(p["marcflavor"])
     if not NAME_RE.fullmatch(p["name"]):
         raise ModuleInputError("name debe tener 1-11 caracteres: minúsculas, números o guion; debe comenzar por letra")
     if p["state"] not in ("present", "absent"):
@@ -62,7 +81,7 @@ def validate_params(p):
             if vhosts.get(key) and not re.fullmatch(r"[A-Za-z0-9-]*", vhosts[key]):
                 raise ModuleInputError("vhosts.%s solo admite caracteres DNS seguros" % key)
         for key in ("opac_port", "staff_port"):
-            if key in vhosts and not 1 <= vhosts[key] <= 65535:
+            if vhosts.get(key) is not None and not 1 <= vhosts[key] <= 65535:
                 raise ModuleInputError("vhosts.%s debe estar entre 1 y 65535" % key)
     if p.get("db_mode") == "request" and p.get("db_request_path") and not os.path.isabs(p["db_request_path"]):
         raise ModuleInputError("db_request_path debe ser una ruta absoluta del nodo remoto")
