@@ -2,6 +2,10 @@
 
 Collection Ansible para administrar Koha instalado desde paquetes Debian/Ubuntu.
 
+El módulo `jmz.koha.plack` administra el daemon Plack y su habilitación de forma
+independiente. Consulte [docs/plack.md](docs/plack.md) para parámetros,
+ejemplos, check mode y limitaciones conocidas.
+
 ## `jmz.koha.instance`
 
 El módulo crea una instancia llamando a `koha-create` como root. En v1 admite
