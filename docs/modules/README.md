@@ -9,6 +9,7 @@ escenarios de uso explicados.
 | --- | --- | --- | --- |
 | [`jmz.koha.instance`](instance/README.md) | Crear y administrar declarativamente una instancia Koha. | [Guía del módulo](instance/README.md) | [Escenarios](instance/examples.md) |
 | [`jmz.koha.plack`](plack/README.md) | Administrar el daemon Plack y su habilitación para una instancia. | [Guía del módulo](plack/README.md) | [Escenarios](plack/examples.md) |
+| [`jmz.koha.worker`](worker/README.md) | Administrar workers de background jobs y su habilitación. | [Guía del módulo](worker/README.md) | [Escenarios](worker/examples.md) |
 | [`jmz.koha.zebra`](zebra/README.md) | Administrar el servicio Zebra de una instancia. | [Guía del módulo](zebra/README.md) | [Escenarios](zebra/examples.md) |
 | [`jmz.koha.zebra_indexer`](zebra_indexer/README.md) | Administrar el daemon de indexación incremental Zebra de una instancia. | [Guía del módulo](zebra_indexer/README.md) | [Escenarios](zebra_indexer/examples.md) |
 | [`jmz.koha.zebra_rebuild`](zebra_rebuild/README.md) | Ejecutar actualizaciones incrementales y reconstrucciones puntuales de los índices Zebra. | [Guía del módulo](zebra_rebuild/README.md) | [Escenarios](zebra_rebuild/examples.md) |
