@@ -21,6 +21,7 @@ use Koha::ItemType;
 use Koha::ItemTypes;
 use Koha::CirculationRules;
 use Koha::AuthUtils;
+use Koha::Email;
 use Koha::Policy::Patrons::Cardnumber;
 
 our $PROTOCOL = 1;
@@ -266,6 +267,8 @@ sub ensure_category {
 
 sub ensure_admin {
     my ($data, $password, $changed, $actions) = @_;
+    die 'Koha rejected the administrator email address'
+        if defined($data->{email}) && !Koha::Email->is_valid($data->{email});
     my $existing = Koha::Patrons->search({ userid => $data->{username} })->single;
     if ($existing) {
         for my $pair ([firstname => 'firstname'], [surname => 'surname'], [cardnumber => 'cardnumber'],
@@ -275,6 +278,16 @@ sub ensure_admin {
         }
         die 'Existing administrator does not have effective superlibrarian privileges'
             unless $existing->is_superlibrarian;
+        if (defined $data->{email}) {
+            my $existing_email = $existing->email // '';
+            die 'Existing administrator email conflicts with the requested email'
+                if length($existing_email) && $existing_email ne $data->{email};
+            if (!length($existing_email)) {
+                $existing->set({ email => $data->{email} });
+                $existing->store or die 'Koha::Patron->store failed while setting administrator email';
+                record_action($actions, $changed, 'administrator_email_set');
+            }
+        }
         return;
     }
     my $category = Koha::Patron::Categories->find($data->{category});
@@ -290,6 +303,7 @@ sub ensure_admin {
         cardnumber => $data->{cardnumber}, branchcode => $data->{library}, categorycode => $data->{category},
         privacy => 'default', address => '', city => '', flags => 1,
     };
+    $patron_data->{email} = $data->{email} if defined $data->{email};
     $patron_data->{dateexpiry} = $category->get_expiry_date($patron_data->{dateenrolled});
     my $patron = Koha::Patron->new($patron_data)->store or die 'Koha::Patron->store failed for administrator';
     $patron->set_password({ password => $password });

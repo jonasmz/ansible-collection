@@ -8,7 +8,7 @@ module: instance
 short_description: Crea de forma declarativa una instancia Koha
 description:
   - Ejecuta koha-create solo cuando la instancia está ausente o en etapa request.
-  - Usa un archivo configfile temporal privado para evitar el límite de argumentos y proteger secretos de SMTP y RabbitMQ.
+  - Usa un archivo configfile temporal privado para evitar el límite de argumentos y proteger secretos de RabbitMQ.
   - La compatibilidad de opciones depende de la versión instalada de koha-create.
 version_added: "1.0.0"
 author: Jonas MZ
@@ -92,18 +92,6 @@ options:
   tmp_path:
     description: Mapea --tmp-path; default nativo /var/lib/koha/name/tmp.
     type: path
-  smtp:
-    description: Opciones nativas SMTP agrupadas. Si se omite, Koha global/default permanece.
-    type: dict
-    no_log: true
-    options:
-      host: {description: Host SMTP pasado a la configuración nativa de Koha., type: str}
-      port: {description: Puerto SMTP., type: int}
-      timeout: {description: Timeout SMTP en segundos., type: int}
-      ssl_mode: {description: Modo TLS nativo; disabled, ssl o starttls., type: str, choices: [disabled, ssl, starttls]}
-      username: {description: Usuario SMTP., type: str}
-      password: {description: Contraseña SMTP; se mantiene fuera de argv y de la salida del módulo., type: str, no_log: true}
-      debug: {description: Activa el diagnóstico SMTP de Koha cuando se solicita explícitamente., type: bool}
   message_broker:
     description: Opciones nativas RabbitMQ; el módulo no instala ni configura el broker.
     type: dict
@@ -190,12 +178,6 @@ EXAMPLES = r'''
       staff_port: 80
       staff_suffix: -admin
     memcached_enabled: true
-    smtp:
-      host: smtp.example.org
-      port: 587
-      ssl_mode: starttls
-      username: biblioteca@example.org
-      password: "{{ vault_smtp_password }}"
   become: true
   no_log: true
 
@@ -292,10 +274,7 @@ ARGUMENT_SPEC = {
     "sru_port": {"type": "int"}, "dbhost": {"type": "str"}, "database": {"type": "str"},
     "passwdfile": {"type": "path"}, "defaultsql": {"type": "path"}, "adminuser": {"type": "int"},
     "configfile": {"type": "path"}, "template_cache_dir": {"type": "path"}, "timezone": {"type": "str"},
-    "upload_path": {"type": "path"}, "tmp_path": {"type": "path"}, "smtp": {"type": "dict", "no_log": True, "options": {
-        "host": {"type": "str"}, "port": {"type": "int"}, "timeout": {"type": "int"},
-        "ssl_mode": {"type": "str", "choices": ["disabled", "ssl", "starttls"]}, "username": {"type": "str"},
-        "password": {"type": "str", "no_log": True}, "debug": {"type": "bool"}}},
+    "upload_path": {"type": "path"}, "tmp_path": {"type": "path"},
     "message_broker": {"type": "dict", "no_log": True, "options": {
         "host": {"type": "str"}, "port": {"type": "int"}, "username": {"type": "str"},
         "password": {"type": "str", "no_log": True}, "vhost": {"type": "str"}}},
@@ -561,8 +540,6 @@ def main():
         for key, flag in option_flags.items():
             if p.get(key):
                 needed.append(flag)
-        if p.get("smtp"):
-            needed.extend("--smtp-%s" % key.replace("ssl_mode", "ssl-mode").replace("username", "user-name") for key, value in p["smtp"].items() if value is not None)
         if p.get("message_broker"):
             needed.extend("--mb-%s" % key.replace("username", "user").replace("password", "pass") for key, value in p["message_broker"].items() if value is not None)
         if p.get("letsencrypt"):

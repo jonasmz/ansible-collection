@@ -76,7 +76,7 @@ y posterior, nunca la contraseña.
 | `sample_data` | lista | no | IDs opcionales `sección/archivo.sql` del catálogo de Koha; predeterminado vacío. |
 | `library` | mapa | para `present` | `code`, `name`. No se reconcilia una biblioteca existente. |
 | `patron_categories` | lista | para `present` | Categorías con `code`, `description`, `type`, `enrolment_period`, `default_privacy`. |
-| `administrator` | mapa | para `present` | `username`, `firstname`, `surname`, `cardnumber`, `library`, `category`, `password`. La contraseña se marca `no_log`. |
+| `administrator` | mapa | para `present` | `username`, `firstname`, `surname`, `cardnumber`, `library`, `category`, `password` y `email` opcional. La contraseña y el mapa se marcan `no_log`. |
 | `item_types` | lista | para `present` | Tipos con `code` y `description`; se exige al menos uno. |
 | `circulation_rules` | lista | para `present` | Ámbito `library`/`category`/`item_type` y mapa explícito `rules`; no hay política predeterminada. |
 | `timeout` | entero | no | Timeout del helper, 1800 segundos por omisión. |
@@ -85,6 +85,13 @@ La categoría del administrador debe ser tipo `S` (personal). La contraseña se
 valida con `Koha::AuthUtils` y se almacena con `Koha::Patron::set_password`.
 La elevación administrativa se obtiene con el mecanismo usado por el onboarding
 de Koha y se verifica mediante `is_superlibrarian`.
+
+Si se declara `administrator.email`, Koha lo valida y lo guarda como correo
+principal del patron. En una cuenta existente sin correo, el módulo completa
+ese dato; si la cuenta ya tiene una dirección distinta, falla para evitar
+reemplazarla silenciosamente. Omitir `email` conserva el valor actual.
+`administrator.email` es el correo del patron y no configura la preferencia
+global `KohaAdminEmailAddress`.
 
 Los identificadores de `sample_data` se validan contra el catálogo de Koha y sus
 rutas canónicas deben permanecer dentro de `installer/data`; no se aceptan rutas

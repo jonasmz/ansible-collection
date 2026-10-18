@@ -66,11 +66,13 @@ El backend interpola estas credenciales en SQL sin escape: el
 username debe ser `[A-Za-z0-9_]{1,32}`. La contraseña admite de 1 a 128
 caracteres ASCII imprimibles sin espacios, incluidos símbolos como `!`, `@`,
 `#`, `%` y `$`; por las interpolaciones sin escape del `koha-create` nativo,
-se rechazan `:`, comilla simple, `&`, `/`, backslash, `<` y `>`. SMTP y
-message broker se guardan en configfile temporal 0600, no en argv. El script de
-referencia interpola algunos valores en sustituciones `sed`; por seguridad se
-rechazan `/`, `&`, backslash y saltos de línea en credenciales y campos de
-texto SMTP/broker. Añada `no_log: true` a tareas con secretos.
+se rechazan `:`, comilla simple, `&`, `/`, backslash, `<` y `>`. Las opciones
+del message broker se guardan en un configfile temporal 0600, no en argv. El
+script de referencia interpola algunos valores en sustituciones `sed`; por
+seguridad se rechazan `/`, `&`, backslash y saltos de línea en credenciales y
+campos de texto del broker. El módulo no expone opciones SMTP; configúrelas por
+los mecanismos globales de Koha o mediante `configfile`. Añada `no_log: true`
+a tareas con secretos.
 
 ### Configuración y precedencia
 
@@ -90,7 +92,7 @@ con datos de origen no confiable.
 | `database`, `dbhost`, `passwdfile` | `--database` (máx. 64), `--dbhost`, `--passwdfile`. |
 | `defaultsql`, `adminuser` | `--defaultsql`, `--adminuser`; adminuser es ID borrower en importación SQL, no crea cuenta. |
 | `template_cache_dir`, `timezone`, `upload_path`, `tmp_path` | Flags homónimos; omitidos para heredar defaults. |
-| `smtp.*`, `message_broker.*` | Opciones `--smtp-*`, `--mb-*`; omitidas si no se definen. No gestionan servicios externos. |
+| `message_broker.*` | Opciones `--mb-*`; omitidas si no se definen. No gestiona el servicio externo. |
 | `keep_cookies` | Repetición de `--keep-cookie`, serializada como array `KEEP_COOKIE`. |
 | `vhosts.*` | Variables `DOMAIN`, `OPACPORT`, `OPACPREFIX`, `OPACSUFFIX`, `INTRAPORT`, `INTRAPREFIX`, `INTRASUFFIX`. Si se omite, hereda `koha-sites.conf`. |
 

@@ -31,7 +31,7 @@ Una segunda ejecución con los mismos parámetros devuelve `changed: false` y no
 invoca `koha-create`. Si los parámetros gestionados difieren, el módulo informa
 drift y no los aplica silenciosamente.
 
-## Crear detrás de HAProxy, con SMTP y Memcached
+## Crear detrás de HAProxy, con Memcached y message broker
 
 Los vhosts se generan en la configuración de la instancia sin editar
 `/etc/koha/koha-sites.conf`. HAProxy puede terminar TLS y enviar tráfico HTTP a
@@ -56,12 +56,6 @@ Apache en el puerto 80. Este módulo no configura HAProxy, SMTP ni Memcached.
     memcached_enabled: true
     memcached_servers:
       - 127.0.0.1:11211
-    smtp:
-      host: smtp.example.org
-      port: 587
-      ssl_mode: starttls
-      username: biblioteca@example.org
-      password: "{{ vault_smtp_password }}"
       timeout: 120
       debug: false
     message_broker:
@@ -76,9 +70,11 @@ Apache en el puerto 80. Este módulo no configura HAProxy, SMTP ni Memcached.
 ```
 
 Con estos valores, los nombres calculados son `biblioteca.example.org` para el
-OPAC y `biblioteca-admin.example.org` para el personal. Las contraseñas SMTP y
-del broker se escriben en un configfile privado temporal, no en argv. Si omites
-`smtp` o `message_broker`, Koha conserva sus valores globales o predeterminados.
+OPAC y `biblioteca-admin.example.org` para el personal. La contraseña del
+broker se escribe en un configfile privado temporal, no en argv. Si omites
+`message_broker`, Koha conserva sus valores globales o predeterminados. El
+módulo no ofrece opciones SMTP; configura el correo saliente en los ajustes
+globales de Koha o en un `configfile` administrado por separado.
 
 `opac_port` y `staff_port` configuran los puertos de los VirtualHost. No
 configuran la dirección IP de escucha de Apache. El módulo actualmente no
