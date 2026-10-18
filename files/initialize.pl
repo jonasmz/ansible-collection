@@ -376,15 +376,26 @@ sub initialize_install {
         $PHASE = 'initial_data';
         my $flavour = $request->{marc_flavour};
         my $lang = $request->{language};
-        my $languages = getAllLanguages();
+        die 'Invalid Koha language identifier' unless $lang =~ /\A[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*\z/;
+        my $languages = getAllLanguages() || [];
         my %language_codes = map { ($_->{language_code} => 1) } @$languages;
-        die "Language $lang is not in Koha's installed language catalog" unless $language_codes{$lang};
+        my $dbms = C4::Context->config('db_scheme') || 'mysql';
+        my $data_root = C4::Context->config('intranetdir') . "/installer/data/$dbms";
+        unless ($language_codes{$lang}) {
+            my $has_frameworks = -d "$data_root/$lang";
+            my $has_localization = -d "$data_root/localization/$lang";
+            die "Language $lang is not in Koha's installed language catalog"
+                unless $has_frameworks || $has_localization;
+            # On a fresh schema the language registry table has not yet been
+            # populated by subtag_registry.sql. Installer only uses this list
+            # to label the loaded framework language, so seed the selected
+            # filesystem-backed language until the installer SQL populates it.
+            push @$languages, { language_code => $lang, language_locale_name => $lang };
+        }
         my ($fallback, $framework_catalog) = $installer->marc_framework_sql_list($lang, $flavour);
         my ($sample_fallback, $sample_catalog) = $installer->sample_data_sql_list($lang);
         push @WARNINGS, 'Koha no dispone de datos de instalación traducidos para el idioma solicitado; se usaron archivos en inglés'
             if $fallback || $sample_fallback;
-        my $dbms = C4::Context->config('db_scheme') || 'mysql';
-        my $data_root = C4::Context->config('intranetdir') . "/installer/data/$dbms";
         my @load;
         for my $entry (flatten_catalog($framework_catalog)) {
             push @load, verified_catalog_file($entry, $data_root) if $entry->{mandatory};

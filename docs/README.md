@@ -36,6 +36,13 @@ Consulte el [índice de módulos](modules/README.md) para ver su interfaz, compo
 | [`jmz.koha.zebra_indexer`](modules/zebra_indexer/README.md) | Administrar el daemon de indexación incremental Zebra de una instancia. | [Guía](modules/zebra_indexer/README.md) | [Escenarios](modules/zebra_indexer/examples.md) |
 | [`jmz.koha.zebra_rebuild`](modules/zebra_rebuild/README.md) | Ejecutar actualizaciones incrementales y reconstrucciones puntuales de índices Zebra. | [Guía](modules/zebra_rebuild/README.md) | [Escenarios](modules/zebra_rebuild/examples.md) |
 
+## Despliegues de ejemplo
+
+- [Una instancia Koha lista para uso](single-instance-deployment.md): playbook,
+  ejecución y resultados en la VM de integración.
+- [Prueba de integración de todos los módulos](integration-test.md): escenario
+  integral de QA.
+
 ## Compatibilidad
 
 La colección declara `ansible-core >= 2.15`. Las opciones de los comandos Koha y parte del comportamiento de los servicios dependen de la versión instalada en el host administrado. Revise las notas de compatibilidad de cada módulo antes de usarlo con otra versión de Koha.

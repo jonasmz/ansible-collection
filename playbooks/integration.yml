@@ -1,0 +1,260 @@
+---
+- name: Integration deployment for jmz.koha
+  hosts: koha_integration
+  become: true
+  gather_facts: true
+
+  vars_prompt:
+    - name: koha_superlibrarian_password
+      prompt: Password for the Koha superlibrarian account
+      private: true
+      confirm: true
+
+  vars:
+    koha_instance: codexqa26
+    koha_domain: 10.27.49.248.sslip.io
+    koha_superlibrarian_username: superlibrarian
+    koha_library_code: QA26
+    koha_staff_category: QASTAFF
+    koha_patron_category: QAADULT
+    koha_item_type: QABOOK
+    koha_run_initial_rebuild: true
+
+  tasks:
+    - name: Enable Apache modules required by koha-create
+      ansible.builtin.command:
+        argv:
+          - a2enmod
+          - rewrite
+          - cgi
+      register: apache_modules_enabled
+      changed_when: "'already enabled' not in (apache_modules_enabled.stdout | lower)"
+      notify:
+        - Validate Apache configuration
+        - Reload Apache
+
+    - name: Apply Apache module changes before creating the Koha site
+      ansible.builtin.meta: flush_handlers
+
+    - name: Create the isolated integration instance
+      jmz.koha.instance:
+        name: "{{ koha_instance }}"
+        state: present
+        db_mode: create
+        marcflavor: marc21
+        zebralang: es
+        vhosts:
+          domain: ".{{ koha_domain }}"
+          opac_suffix: -opac
+          staff_suffix: -staff
+      register: instance_created
+
+    - name: Initialize Koha and provision a superlibrarian
+      jmz.koha.initialize:
+        instance: "{{ koha_instance }}"
+        state: present
+        language: en
+        marc_flavour: MARC21
+        library:
+          code: "{{ koha_library_code }}"
+          name: Biblioteca de integración
+        patron_categories:
+          - code: "{{ koha_staff_category }}"
+            description: Personal de integración
+            type: S
+            enrolment_period: 1
+            default_privacy: default
+          - code: "{{ koha_patron_category }}"
+            description: Usuarios adultos de integración
+            type: A
+            enrolment_period: 1
+            default_privacy: default
+        administrator:
+          username: "{{ koha_superlibrarian_username }}"
+          firstname: Koha
+          surname: Superlibrarian
+          cardnumber: QA26ADMIN
+          library: "{{ koha_library_code }}"
+          category: "{{ koha_staff_category }}"
+          password: "{{ koha_superlibrarian_password }}"
+        item_types:
+          - code: "{{ koha_item_type }}"
+            description: Libro de integración
+        circulation_rules:
+          - library: "{{ koha_library_code }}"
+            category: "{{ koha_patron_category }}"
+            item_type: "{{ koha_item_type }}"
+            rules:
+              issuelength: 14
+              lengthunit: days
+              maxissueqty: 5
+              renewalsallowed: 2
+      no_log: true
+
+    - name: Recheck Koha onboarding idempotency
+      jmz.koha.initialize:
+        instance: "{{ koha_instance }}"
+        state: present
+        language: en
+        marc_flavour: MARC21
+        library:
+          code: "{{ koha_library_code }}"
+          name: Biblioteca de integración
+        patron_categories:
+          - code: "{{ koha_staff_category }}"
+            description: Personal de integración
+            type: S
+            enrolment_period: 1
+            default_privacy: default
+          - code: "{{ koha_patron_category }}"
+            description: Usuarios adultos de integración
+            type: A
+            enrolment_period: 1
+            default_privacy: default
+        administrator:
+          username: "{{ koha_superlibrarian_username }}"
+          firstname: Koha
+          surname: Superlibrarian
+          cardnumber: QA26ADMIN
+          library: "{{ koha_library_code }}"
+          category: "{{ koha_staff_category }}"
+          password: "{{ koha_superlibrarian_password }}"
+        item_types:
+          - code: "{{ koha_item_type }}"
+            description: Libro de integración
+        circulation_rules:
+          - library: "{{ koha_library_code }}"
+            category: "{{ koha_patron_category }}"
+            item_type: "{{ koha_item_type }}"
+            rules:
+              issuelength: 14
+              lengthunit: days
+              maxissueqty: 5
+              renewalsallowed: 2
+      register: initialize_rechecked
+      no_log: true
+
+    - name: Enable and start Apache Plack
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        enabled: true
+        state: started
+      register: plack_started
+
+    - name: Enable and start Zebra
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: started
+      register: zebra_started
+
+    - name: Build the initial bibliographic and authority indexes
+      jmz.koha.zebra_rebuild:
+        instance: "{{ koha_instance }}"
+        mode: full
+        target: all
+        require_zebra_running: true
+      register: zebra_rebuilt
+      async: 7200
+      poll: 30
+      when: koha_run_initial_rebuild | bool
+
+    - name: Enable and start both background worker queues
+      jmz.koha.worker:
+        name: "{{ koha_instance }}"
+        state: started
+        queue: all
+      register: workers_started
+
+    - name: Enable and start the incremental Zebra indexer
+      jmz.koha.zebra_indexer:
+        instance: "{{ koha_instance }}"
+        state: started
+        verify_zebra_engine: true
+        require_zebra_running: true
+      register: indexer_started
+
+    - name: Confirm the site is reachable through its staff virtual host
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/"
+        headers:
+          Host: "{{ koha_instance }}-staff.{{ koha_domain }}"
+        status_code: [200, 301, 302]
+        return_content: false
+      register: staff_site_http
+
+    - name: Recheck instance idempotency
+      jmz.koha.instance:
+        name: "{{ koha_instance }}"
+        state: present
+        db_mode: create
+        marcflavor: marc21
+        zebralang: es
+        vhosts:
+          domain: ".{{ koha_domain }}"
+          opac_suffix: -opac
+          staff_suffix: -staff
+      register: instance_rechecked
+
+    - name: Recheck Plack state
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        enabled: true
+        state: started
+      register: plack_rechecked
+
+    - name: Recheck Zebra state
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: started
+      register: zebra_rechecked
+
+    - name: Recheck worker state
+      jmz.koha.worker:
+        name: "{{ koha_instance }}"
+        state: started
+        queue: all
+      register: workers_rechecked
+
+    - name: Recheck indexer state
+      jmz.koha.zebra_indexer:
+        instance: "{{ koha_instance }}"
+        state: started
+        verify_zebra_engine: true
+        require_zebra_running: true
+      register: indexer_rechecked
+
+    - name: Assert all managed services are active and the second pass is idempotent
+      ansible.builtin.assert:
+        that:
+          - plack_rechecked.running
+          - zebra_rechecked.state == 'started'
+          - indexer_rechecked.state == 'started'
+          - workers_rechecked.workers | length > 0
+          - workers_rechecked.workers.values() | selectattr('running', 'equalto', true) | list | length == workers_rechecked.workers | length
+          - not instance_rechecked.changed
+          - not initialize_rechecked.changed
+          - not plack_rechecked.changed
+          - not zebra_rechecked.changed
+          - not workers_rechecked.changed
+          - not indexer_rechecked.changed
+          - staff_site_http.status in [200, 301, 302]
+        fail_msg: Integration verification failed; inspect the preceding module results.
+
+    - name: Report the resulting Koha access details
+      ansible.builtin.debug:
+        msg:
+          instance: "{{ koha_instance }}"
+          staff_url: "http://{{ koha_instance }}-staff.{{ koha_domain }}/"
+          opac_url: "http://{{ koha_instance }}-opac.{{ koha_domain }}/"
+          superlibrarian: "{{ koha_superlibrarian_username }}"
+          initial_index_status: "{{ zebra_rebuilt.status | default('completed on initial run') if koha_run_initial_rebuild | bool else 'skipped on idempotency recheck' }}"
+
+  handlers:
+    - name: Validate Apache configuration
+      ansible.builtin.command: apache2ctl configtest
+      changed_when: false
+
+    - name: Reload Apache
+      ansible.builtin.service:
+        name: apache2
+        state: reloaded

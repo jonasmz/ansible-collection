@@ -140,6 +140,11 @@ def config_values(p, request_passwdfile=None):
                        ("staff_suffix", "INTRASUFFIX")):
         if field in v:
             values[key] = v[field]
+    if v:
+        # koha-create may render an invalid *:None vhost if either port is
+        # absent from koha-sites.conf. Default both public sites to HTTP.
+        values.setdefault("OPACPORT", 80)
+        values.setdefault("INTRAPORT", 80)
     # CLO_* variables are applied after the configfile by the script and give
     # these explicit module parameters precedence over global Koha settings.
     mapping = {

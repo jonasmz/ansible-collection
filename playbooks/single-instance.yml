@@ -1,0 +1,145 @@
+---
+- name: Desplegar una instancia Koha lista para uso
+  hosts: koha_integration
+  become: true
+  gather_facts: false
+
+  vars_prompt:
+    - name: koha_superlibrarian_password
+      prompt: Password para superlibrarian de codexlib26
+      private: true
+      confirm: true
+
+  vars:
+    koha_instance: codexlib26
+    koha_domain: 10.27.49.248.sslip.io
+    koha_library_code: CENTRAL
+    koha_staff_category: STAFF
+    koha_patron_category: ADULT
+    koha_item_type: BOOK
+
+  tasks:
+    - name: Crear una única instancia Koha con vhosts OPAC y personal
+      jmz.koha.instance:
+        name: "{{ koha_instance }}"
+        state: present
+        db_mode: create
+        marcflavor: marc21
+        zebralang: es
+        vhosts:
+          domain: ".{{ koha_domain }}"
+          opac_suffix: -opac
+          staff_suffix: -staff
+      notify:
+        - Validate Apache configuration
+        - Reload Apache
+
+    - name: Aplicar el nuevo vhost antes de inicializar la instancia
+      ansible.builtin.meta: flush_handlers
+
+    - name: Inicializar la biblioteca y crear el superlibrarian
+      jmz.koha.initialize:
+        instance: "{{ koha_instance }}"
+        state: present
+        language: en
+        marc_flavour: MARC21
+        library:
+          code: "{{ koha_library_code }}"
+          name: Biblioteca Central
+        patron_categories:
+          - code: "{{ koha_staff_category }}"
+            description: Personal bibliotecario
+            type: S
+            enrolment_period: 1
+            default_privacy: default
+          - code: "{{ koha_patron_category }}"
+            description: Usuarios adultos
+            type: A
+            enrolment_period: 1
+            default_privacy: default
+        administrator:
+          username: superlibrarian
+          firstname: Admin
+          surname: Biblioteca
+          cardnumber: CENTRALADMIN
+          library: "{{ koha_library_code }}"
+          category: "{{ koha_staff_category }}"
+          password: "{{ koha_superlibrarian_password }}"
+        item_types:
+          - code: "{{ koha_item_type }}"
+            description: Libro
+        circulation_rules:
+          - library: "{{ koha_library_code }}"
+            category: "{{ koha_patron_category }}"
+            item_type: "{{ koha_item_type }}"
+            rules:
+              issuelength: 14
+              lengthunit: days
+              maxissueqty: 5
+              renewalsallowed: 2
+      no_log: true
+
+    - name: Habilitar y arrancar Plack para la instancia
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        enabled: true
+        state: started
+
+    - name: Arrancar Zebra
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: started
+
+    - name: Crear los índices iniciales de bibliografía y autoridades
+      jmz.koha.zebra_rebuild:
+        instance: "{{ koha_instance }}"
+        mode: full
+        target: all
+        require_zebra_running: true
+      async: 7200
+      poll: 30
+
+    - name: Arrancar el indexador incremental
+      jmz.koha.zebra_indexer:
+        instance: "{{ koha_instance }}"
+        state: started
+        verify_zebra_engine: true
+        require_zebra_running: true
+
+    - name: Comprobar el acceso HTTP al OPAC
+      ansible.builtin.uri:
+        url: http://127.0.0.1/
+        headers:
+          Host: "{{ koha_instance }}-opac.{{ koha_domain }}"
+        status_code: [200, 301, 302]
+        return_content: false
+      register: koha_opac_http
+
+    - name: Comprobar el acceso HTTP al sitio de personal
+      ansible.builtin.uri:
+        url: http://127.0.0.1/
+        headers:
+          Host: "{{ koha_instance }}-staff.{{ koha_domain }}"
+        status_code: [200, 301, 302]
+        return_content: false
+      register: koha_staff_http
+
+    - name: Mostrar las URL y el usuario creados
+      ansible.builtin.debug:
+        msg:
+          instance: "{{ koha_instance }}"
+          opac_url: "http://{{ koha_instance }}-opac.{{ koha_domain }}/"
+          staff_url: "http://{{ koha_instance }}-staff.{{ koha_domain }}/"
+          superlibrarian: superlibrarian
+          opac_http_status: "{{ koha_opac_http.status }}"
+          staff_http_status: "{{ koha_staff_http.status }}"
+
+  handlers:
+    - name: Validate Apache configuration
+      ansible.builtin.command: apache2ctl configtest
+      changed_when: false
+
+    - name: Reload Apache
+      ansible.builtin.service:
+        name: apache2
+        state: reloaded
