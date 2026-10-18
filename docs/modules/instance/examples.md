@@ -1,5 +1,8 @@
 # Ejemplos de `jmz.koha.instance`
 
+[Guía del módulo](README.md) · [Índice de módulos](../README.md) ·
+[Guía general](../../README.md)
+
 Todos los ejemplos asumen que la colección está instalada y que las tareas se
 ejecutan en el servidor Koha con privilegios suficientes (`become: true`).
 Los parámetros de contraseña deben venir de Ansible Vault o de otra fuente
