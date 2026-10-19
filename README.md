@@ -10,6 +10,8 @@ La colección incluye módulos para crear y administrar instancias Koha, control
 - [Índice de módulos](docs/modules/README.md): descripción, interfaz y enlaces a la documentación general y ejemplos Markdown de cada módulo.
 - [Guía de `jmz.koha.initialize`](docs/modules/initialize/README.md): inicialización de la base Koha y onboarding sin el instalador web.
 - [Escenarios de `jmz.koha.initialize`](docs/modules/initialize/examples.md): playbooks para inicialización y configuración inicial.
+- [Guía de `jmz.koha.localization`](docs/modules/localization/README.md): configuración de idiomas y selectores de OPAC y Staff.
+- [Escenarios de `jmz.koha.localization`](docs/modules/localization/examples.md): configuraciones monolingües, multilingües, parciales y previsualización.
 - [Guía de `jmz.koha.translate`](docs/modules/translate/README.md): administración declarativa de traducciones Koha.
 - [Escenarios de `jmz.koha.translate`](docs/modules/translate/examples.md): instalación, eliminación, actualización explícita y modo de comprobación.
 - [Guía de `jmz.koha.zebra`](docs/modules/zebra/README.md): ciclo de vida Zebra, enablement por backend y resultados.
