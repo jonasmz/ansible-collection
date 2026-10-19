@@ -15,5 +15,6 @@ escenarios de uso explicados.
 | [`jmz.koha.zebra`](zebra/README.md) | Administrar el servicio Zebra de una instancia. | [Guía del módulo](zebra/README.md) | [Escenarios](zebra/examples.md) |
 | [`jmz.koha.zebra_indexer`](zebra_indexer/README.md) | Administrar el daemon de indexación incremental Zebra de una instancia. | [Guía del módulo](zebra_indexer/README.md) | [Escenarios](zebra_indexer/examples.md) |
 | [`jmz.koha.zebra_rebuild`](zebra_rebuild/README.md) | Ejecutar actualizaciones incrementales y reconstrucciones puntuales de los índices Zebra. | [Guía del módulo](zebra_rebuild/README.md) | [Escenarios](zebra_rebuild/examples.md) |
+| [`jmz.koha.translate`](translate/README.md) | Administrar traducciones Koha mediante `koha-translate`. | [Guía del módulo](translate/README.md) | [Escenarios](translate/examples.md) |
 
 [Volver a la guía general](../README.md) · [Volver al README de la colección](../../README.md)
