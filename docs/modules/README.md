@@ -11,10 +11,10 @@ escenarios de uso explicados.
 | [`jmz.koha.plack`](plack/README.md) | Administrar el daemon Plack y su habilitación para una instancia. | [Guía del módulo](plack/README.md) | [Escenarios](plack/examples.md) |
 | [`jmz.koha.initialize`](initialize/README.md) | Inicializar datos de Koha y completar el onboarding inicial. | [Guía del módulo](initialize/README.md) | [Escenarios](initialize/examples.md) |
 | [`jmz.koha.smtp`](smtp/README.md) | Configurar transporte SMTP, habilitación de correo y correo administrativo. | [Guía del módulo](smtp/README.md) | [Escenarios](smtp/examples.md) |
-| [`jmz.koha.translate`](translate/README.md) | Administrar traducciones Koha mediante `koha-translate`. | [Guía del módulo](translate/README.md) | [Escenarios](translate/examples.md) |
 | [`jmz.koha.worker`](worker/README.md) | Administrar workers de background jobs y su habilitación. | [Guía del módulo](worker/README.md) | [Escenarios](worker/examples.md) |
 | [`jmz.koha.zebra`](zebra/README.md) | Administrar el servicio Zebra de una instancia. | [Guía del módulo](zebra/README.md) | [Escenarios](zebra/examples.md) |
 | [`jmz.koha.zebra_indexer`](zebra_indexer/README.md) | Administrar el daemon de indexación incremental Zebra de una instancia. | [Guía del módulo](zebra_indexer/README.md) | [Escenarios](zebra_indexer/examples.md) |
 | [`jmz.koha.zebra_rebuild`](zebra_rebuild/README.md) | Ejecutar actualizaciones incrementales y reconstrucciones puntuales de los índices Zebra. | [Guía del módulo](zebra_rebuild/README.md) | [Escenarios](zebra_rebuild/examples.md) |
+| [`jmz.koha.translate`](translate/README.md) | Administrar traducciones Koha mediante `koha-translate`. | [Guía del módulo](translate/README.md) | [Escenarios](translate/examples.md) |
 
 [Volver a la guía general](../README.md) · [Volver al README de la colección](../../README.md)
