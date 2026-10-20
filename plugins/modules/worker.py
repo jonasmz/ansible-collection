@@ -16,10 +16,11 @@ requirements:
   - Koha instalado mediante sus paquetes Debian o Ubuntu en el host administrado
   - koha-worker disponible en el host administrado
 options:
-  name:
+  instance:
     description: Identificador de la instancia Koha.
     type: str
     required: true
+    aliases: [name]
   state:
     description: Estado operativo deseado. C(status) solo consulta.
     type: str
@@ -48,14 +49,14 @@ notes:
 EXAMPLES = r'''
 - name: Iniciar el worker general
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: started
     queue: default
   become: true
 
 - name: Asegurar ambas colas y su inicio automático
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: started
     queue: all
     enabled: true
@@ -63,21 +64,21 @@ EXAMPLES = r'''
 
 - name: Reiniciar los workers
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: restarted
     queue: all
   become: true
 
 - name: Consultar los workers
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: status
     queue: all
   register: worker_status
 
 - name: Detener y deshabilitar los workers
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: stopped
     queue: all
     enabled: false
@@ -89,8 +90,12 @@ changed:
   description: Si se modificó alguna cola o se ejecutó un reinicio explícito.
   returned: always
   type: bool
-name:
+instance:
   description: Identificador de la instancia.
+  returned: always
+  type: str
+name:
+  description: Alias legado de instance.
   returned: always
   type: str
 state:
@@ -251,7 +256,7 @@ def _display_worker(item, changed):
 def main():
     module = AnsibleModule(
         argument_spec=dict(
-            name=dict(type="str", required=True),
+            instance=dict(type="str", required=True, aliases=["name"]),
             state=dict(type=choice_normalizer(["started", "stopped", "restarted", "status"]), choices=["started", "stopped", "restarted", "status"], default="status"),
             queue=dict(type=choice_normalizer(["default", "long_tasks", "all"]), choices=["default", "long_tasks", "all"], default="default"),
             enabled=dict(type="bool"),
@@ -259,7 +264,7 @@ def main():
         ),
         supports_check_mode=True,
     )
-    name = module.params["name"]
+    name = module.params.get("instance", module.params.get("name"))
     desired_state = module.params["state"]
     requested_queue = module.params["queue"]
     desired_enabled = module.params.get("enabled")
@@ -267,25 +272,25 @@ def main():
 
     if not NAME_RE.fullmatch(name or ""):
         module.fail_json(
-            msg=("name debe ser un identificador Koha válido (1-11 caracteres, minúsculas, "
+            msg=("instance debe ser un identificador Koha válido (1-11 caracteres, minúsculas, "
                  "dígitos o guiones; debe comenzar con una letra)"),
-            name=name,
+            instance=name, name=name,
         )
     if desired_state == "status" and desired_enabled is not None:
-        module.fail_json(msg="state=status es de solo lectura y no puede combinarse con enabled", name=name)
+        module.fail_json(msg="state=status es de solo lectura y no puede combinarse con enabled", instance=name, name=name)
 
     config_path = "/etc/koha/sites/%s/koha-conf.xml" % name
     instance_path = "/etc/koha/sites/%s" % name
     if not os.path.isdir(instance_path) or not os.path.isfile(config_path):
-        module.fail_json(msg="La instancia Koha %s no existe o no tiene koha-conf.xml" % name, name=name)
+        module.fail_json(msg="La instancia Koha %s no existe o no tiene koha-conf.xml" % name, instance=name, name=name)
     binary = module.get_bin_path("koha-worker", required=False)
     if not binary:
-        module.fail_json(msg="No se encontró koha-worker en el host administrado", name=name)
+        module.fail_json(msg="No se encontró koha-worker en el host administrado", instance=name, name=name)
 
     help_rc, help_out, help_err = module.run_command([binary, "--help"])
     help_text = help_out + "\n" + help_err
     if help_rc != 0 or "--status" not in help_text or "--queue" not in help_text:
-        module.fail_json(msg="No se pudo verificar la interfaz requerida de koha-worker --help", name=name,
+        module.fail_json(msg="No se pudo verificar la interfaz requerida de koha-worker --help", instance=name, name=name,
                          rc=help_rc, stderr=help_err)
     supports_all = "--all-queues" in help_text
     supports_quiet = "--quiet" in help_text or "-q" in help_text
@@ -295,13 +300,13 @@ def main():
     else:
         queues = list(QUEUES) if requested_queue == "all" else [requested_queue]
     if quiet and not supports_quiet:
-        module.fail_json(msg="La versión instalada de koha-worker no anuncia soporte para --quiet", name=name)
+        module.fail_json(msg="La versión instalada de koha-worker no anuncia soporte para --quiet", instance=name, name=name)
     if desired_state in ("started", "stopped", "restarted") and ("--" + {
             "started": "start", "stopped": "stop", "restarted": "restart"}[desired_state]) not in help_text:
-        module.fail_json(msg="La versión instalada de koha-worker no anuncia la operación solicitada", name=name,
+        module.fail_json(msg="La versión instalada de koha-worker no anuncia la operación solicitada", instance=name, name=name,
                          state=desired_state)
     if desired_enabled is not None and ("--enable" not in help_text or "--disable" not in help_text):
-        module.fail_json(msg="La versión instalada de koha-worker no anuncia --enable y --disable", name=name)
+        module.fail_json(msg="La versión instalada de koha-worker no anuncia --enable y --disable", instance=name, name=name)
 
     # Koha's packaged per-worker templates are the positive signal for its
     # systemd backend. A generic systemd PID 1 can also host the legacy Koha
@@ -433,7 +438,7 @@ def main():
                    "Los workers seleccionados están detenidos." if desired_state == "stopped" else
                    "Se reiniciaron los workers seleccionados." if desired_state == "restarted" else
                    "Estado de los workers consultado sin cambios.")
-        result = dict(changed=changed, name=name, state=desired_state, queue=requested_queue,
+        result = dict(changed=changed, instance=name, name=name, state=desired_state, queue=requested_queue,
                       backend=backend, workers=worker_results, actions=actions, msg=message)
         if getattr(module, "_diff", False):
             result["diff"] = {"before": before,
@@ -443,7 +448,7 @@ def main():
     except WorkerError as exc:
         current = {q: _display_worker(observed.get(q, {}), q in changed_queues)
                    for q in queues if q in observed}
-        module.fail_json(msg=str(exc), name=name, state=desired_state, queue=requested_queue,
+        module.fail_json(msg=str(exc), instance=name, name=name, state=desired_state, queue=requested_queue,
                          backend=backend, workers=current, changed=bool(changed_queues),
                          actions=actions, failures=applied)
 

@@ -73,7 +73,7 @@
       jmz.koha.initialize:
         instance: biblioteca
         language: es-ES
-        marc_flavour: MARC21
+        marcflavor: MARC21
         library: {code: CENTRAL, name: Biblioteca Central}
         patron_categories:
           - {code: STAFF, description: Personal, type: S, enrolment_period: 1, default_privacy: default}

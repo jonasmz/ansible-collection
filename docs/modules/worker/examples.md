@@ -10,7 +10,7 @@ Use `become: true` para cambiar el estado operativo o la habilitación de worker
 ```yaml
 - name: Iniciar el worker general
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: started
     queue: default
   become: true
@@ -25,7 +25,7 @@ operación de inicio o detención.
 ```yaml
 - name: Mantener workers activos y habilitados
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: started
     queue: all
     enabled: true
@@ -40,7 +40,7 @@ explícitamente ambas propiedades.
 ```yaml
 - name: Reiniciar todas las colas
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: restarted
     queue: all
   become: true
@@ -54,7 +54,7 @@ finaliza correctamente.
 ```yaml
 - name: Consultar ambas colas
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: status
     queue: all
   register: worker_status
@@ -71,7 +71,7 @@ La consulta no modifica servicios. No combine `state: status` con `enabled`.
 ```yaml
 - name: Detener workers y deshabilitar el inicio automático
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: stopped
     queue: all
     enabled: false
@@ -83,7 +83,7 @@ La consulta no modifica servicios. No combine `state: status` con `enabled`.
 ```yaml
 - name: Asegurar workers de las bibliotecas
   jmz.koha.worker:
-    name: "{{ item }}"
+    instance: "{{ item }}"
     state: started
     queue: all
   loop:
@@ -100,7 +100,7 @@ Cada iteración consulta y administra exclusivamente la instancia indicada.
 ```yaml
 - name: Revisar cambios previstos
   jmz.koha.worker:
-    name: biblioteca
+    instance: biblioteca
     state: started
     queue: all
     enabled: true

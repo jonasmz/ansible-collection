@@ -12,7 +12,7 @@ operaciones que cambian procesos o configuración de inicio.
 
 | Parámetro | Tipo | Obligatorio | Valores | Descripción |
 | --- | --- | --- | --- | --- |
-| `name` | string | sí | Identificador Koha | Instancia que se administrará. Se valida con el formato de nombres de Koha empaquetado. |
+| `instance` | string | sí | Identificador Koha | Instancia que se administrará. `name` sigue disponible como alias. |
 | `state` | string | no | `started`, `stopped`, `restarted`, `status` | Estado operativo. Predeterminado: `status`. |
 | `queue` | string | no | `default`, `long_tasks`, `all` | Cola que se administra. Predeterminado: `default`. `all` representa ambas colas y nunca se pasa como valor de `--queue`. |
 | `enabled` | boolean | no | `true`, `false` | Habilita o deshabilita el inicio automático de forma independiente del estado operativo. Si se omite, conserva la configuración actual. |

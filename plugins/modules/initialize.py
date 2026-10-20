@@ -30,11 +30,12 @@ options:
     description: Código de idioma disponible en el catálogo de Koha usado para seleccionar los datos iniciales.
     type: str
     required: true
-  marc_flavour:
-    description: Variante MARC instalada por el paquete y reconocida por C4::Installer.
+  marcflavor:
+    description: Variante MARC instalada por el paquete y reconocida por C4::Installer; coincide con jmz.koha.instance.
     type: str
     choices: [MARC21, UNIMARC]
     required: true
+    aliases: [marc_flavour]
   sample_data:
     description: Identificadores opcionales C(section/archivo.sql) del catálogo de Koha; los datos demostrativos no se cargan por defecto.
     type: list
@@ -101,7 +102,7 @@ EXAMPLES = r'''
   jmz.koha.initialize:
     instance: biblioteca
     language: es-ES
-    marc_flavour: MARC21
+    marcflavor: MARC21
     library:
       code: CENTRAL
       name: Biblioteca Central
@@ -145,14 +146,14 @@ EXAMPLES = r'''
     instance: biblioteca
     state: inspect
     language: es-ES
-    marc_flavour: MARC21
+    marcflavor: MARC21
   become: true
 
 - name: Ejecutar en modo de comprobación
   jmz.koha.initialize:
     instance: biblioteca
     language: es-ES
-    marc_flavour: UNIMARC
+    marcflavor: UNIMARC
     # Los datos y entidades requeridos se declaran igual que en el ejemplo completo.
   check_mode: true
   become: true
@@ -248,6 +249,8 @@ class InitializeError(Exception):
 
 def _validate_params(module):
     p = module.params
+    if "marcflavor" not in p:
+        p["marcflavor"] = p.get("marc_flavour")
     instance = p["instance"]
     if not INSTANCE_RE.fullmatch(instance):
         raise InitializeError("instance debe ser un identificador Koha válido (1-11 caracteres, minúsculas, números o guiones)")
@@ -255,7 +258,7 @@ def _validate_params(module):
         if p.get("administrator") or p.get("library") or p.get("patron_categories") or p.get("item_types") or p.get("circulation_rules"):
             raise InitializeError("state=inspect no acepta parámetros de onboarding")
         return
-    for required in ("language", "marc_flavour", "library", "patron_categories", "administrator", "item_types", "circulation_rules"):
+    for required in ("language", "marcflavor", "library", "patron_categories", "administrator", "item_types", "circulation_rules"):
         if p.get(required) is None:
             raise InitializeError("%s es obligatorio cuando state=present" % required)
     if not LANGUAGE_RE.fullmatch(p["language"]):
@@ -369,7 +372,7 @@ def main():
             instance=dict(type="str", required=True),
             state=dict(type=choice_normalizer(["present", "inspect"]), choices=["present", "inspect"], default="present"),
             language=dict(type="str"),
-            marc_flavour=dict(type=choice_normalizer(["MARC21", "UNIMARC"]), choices=["MARC21", "UNIMARC"]),
+            marcflavor=dict(type=choice_normalizer(["MARC21", "UNIMARC"]), choices=["MARC21", "UNIMARC"], aliases=["marc_flavour"]),
             sample_data=dict(type="list", elements="str", default=[]),
             library=dict(type="dict", options=dict(code=dict(type="str", required=True), name=dict(type="str", required=True))),
             patron_categories=dict(type="list", elements="dict", options=dict(
@@ -455,7 +458,8 @@ def main():
                                  msg="Estado de Koha inspeccionado sin modificaciones.")
             if previous in ("data_incomplete", "inconsistent", "upgrade_required"):
                 raise InitializeError("La instancia está en estado %s; no se reintenta ni migra automáticamente" % previous)
-            request = {k: p[k] for k in ("language", "marc_flavour", "sample_data", "library", "patron_categories", "administrator", "item_types", "circulation_rules")}
+            request = {k: p[k] for k in ("language", "sample_data", "library", "patron_categories", "administrator", "item_types", "circulation_rules")}
+            request["marc_flavour"] = p["marcflavor"]
             request.update(protocol=PROTOCOL, operation="initialize")
             if module.check_mode:
                 planned = previous != "initialized"

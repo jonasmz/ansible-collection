@@ -21,7 +21,7 @@
   tasks:
     - name: Crear una única instancia Koha con vhosts OPAC y personal
       jmz.koha.instance:
-        name: "{{ koha_instance }}"
+        instance: "{{ koha_instance }}"
         state: present
         db_mode: create
         marcflavor: marc21
@@ -42,7 +42,7 @@
         instance: "{{ koha_instance }}"
         state: present
         language: en
-        marc_flavour: MARC21
+        marcflavor: MARC21
         library:
           code: "{{ koha_library_code }}"
           name: Biblioteca Central

@@ -13,10 +13,11 @@ description:
 version_added: "1.0.0"
 author: Jonas MZ
 options:
-  name:
+  instance:
     description: Nombre Unix/DNS de la instancia; 1-11 caracteres.
     type: str
     required: true
+    aliases: [name]
   state:
     description: present crea/configura; absent elimina archivos con doble confirmacion.
     type: str
@@ -81,16 +82,16 @@ options:
     description: Archivo de configuración Bash confiable del administrador; se incluye antes de los overrides generados.
     type: path
   template_cache_dir:
-    description: Mapea --template-cache-dir; default nativo /var/cache/koha/name/templates.
+    description: Mapea --template-cache-dir; default nativo /var/cache/koha/<instance>/templates.
     type: path
   timezone:
     description: Mapea --timezone. Para zonas IANA en MariaDB local, asegura automáticamente las tablas de zonas horarias antes de crear/configurar la instancia.
     type: str
   upload_path:
-    description: Mapea --upload-path; default nativo /var/lib/koha/name/uploads.
+    description: Mapea --upload-path; default nativo /var/lib/koha/<instance>/uploads.
     type: path
   tmp_path:
-    description: Mapea --tmp-path; default nativo /var/lib/koha/name/tmp.
+    description: Mapea --tmp-path; default nativo /var/lib/koha/<instance>/tmp.
     type: path
   message_broker:
     description: Opciones nativas RabbitMQ; el módulo no instala ni configura el broker.
@@ -111,16 +112,17 @@ options:
     type: str
     choices: [local, proxy]
   remove_database:
-    description: Con state=absent permite borrar la DB koha_<name>; por defecto se conserva.
+    description: Con state=absent permite borrar la DB koha_<instance>; por defecto se conserva.
     type: bool
     default: false
   purge_data:
     description: Con state=absent elimina /var/lib/koha/<name> y spool mediante --purge-all.
     type: bool
     default: false
-  confirm_name:
-    description: Debe repetir name exactamente para operaciones destructivas.
+  confirm_instance:
+    description: Debe repetir instance exactamente para operaciones destructivas.
     type: str
+    aliases: [confirm_name]
   confirm_data_loss:
     description: Segunda confirmacion explicita requerida para operaciones destructivas.
     type: bool
@@ -162,7 +164,7 @@ options:
 EXAMPLES = r'''
 - name: Crear instancia Koha
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     marcflavor: marc21
     zebralang: es
@@ -170,7 +172,7 @@ EXAMPLES = r'''
 
 - name: Crear detrás de HAProxy
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     vhosts:
       domain: .example.org
@@ -183,7 +185,7 @@ EXAMPLES = r'''
 
 - name: Usar DB existente
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: use
     database: koha_biblioteca
     db_credentials:
@@ -194,7 +196,7 @@ EXAMPLES = r'''
 
 - name: Solicitar DB externa
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: request
     db_request_path: /root/koha-db-requests/biblioteca-db-request.txt
   become: true
@@ -202,16 +204,16 @@ EXAMPLES = r'''
 
 - name: Completar solicitud previa
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: populate
   become: true
   no_log: true
 
 - name: Reconfigurar una instancia preservando la DB
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     reconfigure: true
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
     vhosts:
       domain: .example.org
@@ -220,15 +222,15 @@ EXAMPLES = r'''
 
 - name: Retirar instancia, preservando DB y datos
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     state: absent
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
   become: true
 
 - name: Crear con TLS terminado localmente
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     vhosts:
       domain: .example.org
@@ -238,7 +240,8 @@ EXAMPLES = r'''
 '''
 
 RETURN = r'''
-name: {description: Nombre validado, returned: always, type: str}
+instance: {description: Nombre de instancia validado, returned: always, type: str}
+name: {description: Alias legado de instance, returned: always, type: str}
 state: {description: Estado inspeccionado o previsto, returned: always, type: str, sample: present}
 db_mode: {description: Modo utilizado, returned: always, type: str}
 config_path: {description: Ruta esperada del koha-conf.xml, returned: always, type: str}
@@ -265,7 +268,7 @@ from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import (
 
 
 ARGUMENT_SPEC = {
-    "name": {"type": "str", "required": True}, "state": {"type": choice_normalizer(["present", "absent"]), "default": "present", "choices": ["present", "absent"]},
+    "instance": {"type": "str", "required": True, "aliases": ["name"]}, "state": {"type": choice_normalizer(["present", "absent"]), "default": "present", "choices": ["present", "absent"]},
     "db_mode": {"type": choice_normalizer(["create", "request", "populate", "use"]), "default": "create", "choices": ["create", "request", "populate", "use"]},
     "marcflavor": {"type": choice_normalizer(["marc21", "unimarc"]), "choices": ["marc21", "unimarc"]},
     "zebralang": {"type": choice_normalizer(["cs", "el", "en", "es", "fr", "nb", "ru", "uk"]), "choices": ["cs", "el", "en", "es", "fr", "nb", "ru", "uk"]},
@@ -281,7 +284,7 @@ ARGUMENT_SPEC = {
     "db_credentials": {"type": "dict", "no_log": True, "options": {"username": {"type": "str", "required": True}, "password": {"type": "str", "required": True, "no_log": True}}},
     "letsencrypt": {"type": "bool", "default": False}, "tls_termination": {"type": choice_normalizer(["local", "proxy"]), "choices": ["local", "proxy"]},
     "remove_database": {"type": "bool", "default": False}, "purge_data": {"type": "bool", "default": False},
-    "confirm_name": {"type": "str"}, "confirm_data_loss": {"type": "bool", "default": False},
+    "confirm_instance": {"type": "str", "aliases": ["confirm_name"]}, "confirm_data_loss": {"type": "bool", "default": False},
     "repair": {"type": "bool", "default": False}, "reconfigure": {"type": "bool", "default": False},
     "keep_cookies": {"type": "list", "elements": "str"},
     "vhosts": {"type": "dict", "options": {"domain": {"type": "str"}, "opac_port": {"type": "int"}, "opac_prefix": {"type": "str"}, "opac_suffix": {"type": "str"}, "staff_port": {"type": "int"}, "staff_prefix": {"type": "str"}, "staff_suffix": {"type": "str"}}},
@@ -296,7 +299,8 @@ def _safe_fingerprint(p):
         if isinstance(value, list):
             return [clean(v) for v in value]
         return value
-    persistent = {k: v for k, v in p.items() if k not in ("confirm_name", "confirm_data_loss", "repair", "reconfigure", "remove_database", "purge_data")}
+    persistent = {k: v for k, v in p.items() if k not in ("instance", "name", "confirm_instance", "confirm_name", "confirm_data_loss", "repair", "reconfigure", "remove_database", "purge_data")}
+    persistent["name"] = p.get("instance", p.get("name"))
     return hashlib.sha256(json.dumps(clean(persistent), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -353,7 +357,7 @@ def _read_passwd_record(path, name):
     except OSError as exc:
         raise ModuleInputError("no se pudo leer passwdfile (%s)" % exc.__class__.__name__)
     if len(rows) != 1 or len(rows[0]) != 5:
-        raise ModuleInputError("passwdfile debe tener exactamente una fila Koha para name con cinco campos")
+        raise ModuleInputError("passwdfile debe tener exactamente una fila Koha para la instancia solicitada con cinco campos")
     instance, username, password, database, host = rows[0]
     if (instance != name or not re.fullmatch(r"[A-Za-z0-9_]{1,32}", username)
             or not db_password_is_safe(password)
@@ -426,7 +430,7 @@ def _vhost_hostnames(name, vhosts):
 def main():
     module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
     p = module.params
-    name = p["name"]
+    name = p.get("instance", p.get("name"))
     mode = p["db_mode"]
     config_path = "/etc/koha/sites/%s/koha-conf.xml" % name
     apache_path = "/etc/apache2/sites-available/%s.conf" % name
@@ -467,11 +471,11 @@ def main():
         rebuild = False
         if p["state"] == "absent":
             if detected == "absent":
-                module.exit_json(changed=False, name=name, state="absent", actions=[], notices=["No quedan archivos de instancia activos; los datos residuales de /var/lib/koha se conservan."] if paths.get("site_dir") else [])
-            if p.get("confirm_name") != name or not p.get("confirm_data_loss"):
-                raise ModuleInputError("state=absent elimina archivos y servicios; confirme con confirm_name=name y confirm_data_loss=true")
+            module.exit_json(changed=False, instance=name, name=name, state="absent", actions=[], notices=["No quedan archivos de instancia activos; los datos residuales de /var/lib/koha se conservan."] if paths.get("site_dir") else [])
+            if p.get("confirm_instance", p.get("confirm_name")) != name or not p.get("confirm_data_loss"):
+                raise ModuleInputError("state=absent elimina archivos y servicios; confirme con confirm_instance=instance y confirm_data_loss=true")
             if module.check_mode:
-                module.exit_json(changed=True, name=name, state="absent", actions=["ejecutar koha-remove"], notices=["Plan previsto; preserve DB por defecto. remove_database/purge_data amplían el borrado."])
+                module.exit_json(changed=True, instance=name, name=name, state="absent", actions=["ejecutar koha-remove"], notices=["Plan previsto; preserve DB por defecto. remove_database/purge_data amplían el borrado."])
             if os.geteuid() != 0:
                 raise ModuleInputError("koha-remove requiere root; ejecute la tarea con become: true")
             remove_binary = p.get("koha_remove_path") or shutil.which("koha-remove")
@@ -494,10 +498,10 @@ def main():
             if not p.get("remove_database"):
                 warnings.append("La base de datos se conservó.")
             elif p.get("database") and p["database"] != "koha_%s" % name:
-                warnings.append("koha-remove elimina su DB convencional koha_<name>; revise manualmente la DB personalizada %s." % p["database"])
+                warnings.append("koha-remove elimina su DB convencional koha_<instance>; revise manualmente la DB personalizada %s." % p["database"])
             if not p.get("purge_data"):
                 warnings.append("/var/lib/koha y uploads se conservaron; use purge_data=true si desea borrarlos.")
-            module.exit_json(changed=True, name=name, state="absent", actions=["koha-remove"], notices=warnings)
+            module.exit_json(changed=True, instance=name, name=name, state="absent", actions=["koha-remove"], notices=warnings)
         if mode == "populate":
             if detected != "requested":
                 raise ModuleInputError("populate requiere estado requested coherente (config Koha, Apache, directorio y marcador de solicitud); estado detectado: %s" % detected)
@@ -521,7 +525,7 @@ def main():
                         raise ModuleInputError("la carga de zonas horarias MariaDB requiere root; ejecute la tarea con become: true")
                     timezone_changed = ensure_mariadb_timezone(module, p["timezone"], p.get("dbhost"))
                 actions = ["cargar tablas de zonas horarias MariaDB"] if timezone_changed else []
-                module.exit_json(changed=timezone_changed, name=name, state="present", db_mode=mode, config_path=config_path, apache_site_path=apache_path, actions=actions, notices=["La instancia está creada; koha-create no se ejecutó."])
+                module.exit_json(changed=timezone_changed, instance=name, name=name, state="present", db_mode=mode, config_path=config_path, apache_site_path=apache_path, actions=actions, notices=["La instancia está creada; koha-create no se ejecutó."])
             rebuild = True
         elif detected == "partial":
             if not p.get("repair"):
@@ -554,7 +558,7 @@ def main():
             planned = ["koha-remove --keep-mysql", "koha-create --use-db"] if rebuild else ["ejecutar koha-create en modo %s" % mode]
             if p.get("timezone") and mode != "request":
                 planned.insert(0, "asegurar tablas de zonas horarias MariaDB si hacen falta")
-            module.exit_json(changed=True, name=name, state="requested" if mode == "request" else "present", db_mode="use" if rebuild else mode,
+            module.exit_json(changed=True, instance=name, name=name, state="requested" if mode == "request" else "present", db_mode="use" if rebuild else mode,
                              config_path=config_path, apache_site_path=apache_path,
                              actions=planned, notices=["Plan previsto; no se verificó que Apache/DB permitan completar la operación."])
         _check_apache_prerequisites(module)
@@ -658,7 +662,7 @@ def main():
             _write_private(marker_path, json.dumps({"state": final_state, "fingerprint": _safe_fingerprint(p), "request_file": request_path if mode == "request" else None}, sort_keys=True) + "\n")
             # Marker is stored in a Koha-owned directory, private to root.
             os.chmod(marker_path, 0o600)
-            result = {"changed": True, "name": name, "state": final_state, "db_mode": mode, "config_path": config_path, "apache_site_path": apache_path,
+            result = {"changed": True, "instance": name, "name": name, "state": final_state, "db_mode": mode, "config_path": config_path, "apache_site_path": apache_path,
                       "actions": ["koha-create --%s" % mode], "notices": []}
             if timezone_changed:
                 result["actions"].insert(0, "cargar tablas de zonas horarias MariaDB")
@@ -676,11 +680,11 @@ def main():
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
     except ModuleInputError as exc:
-        module.fail_json(msg=str(exc), name=name, state="unknown", db_mode=mode,
+        module.fail_json(msg=str(exc), instance=name, name=name, state="unknown", db_mode=mode,
                          changed=timezone_changed, partial=timezone_changed,
                          actions=["cargar tablas de zonas horarias MariaDB"] if timezone_changed else [])
     except OSError as exc:
-        module.fail_json(msg="error de filesystem ejecutando la operación Koha (%s); se omitieron datos sensibles" % exc.__class__.__name__, name=name, state="unknown", db_mode=mode,
+        module.fail_json(msg="error de filesystem ejecutando la operación Koha (%s); se omitieron datos sensibles" % exc.__class__.__name__, instance=name, name=name, state="unknown", db_mode=mode,
                          changed=timezone_changed, partial=timezone_changed,
                          actions=["cargar tablas de zonas horarias MariaDB"] if timezone_changed else [])
 

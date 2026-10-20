@@ -108,10 +108,12 @@ def ensure_mariadb_timezone(module, timezone, dbhost):
 
 
 def validate_params(p):
+    instance = p.get("instance", p.get("name"))
+    confirmed_instance = p.get("confirm_instance", p.get("confirm_name"))
     if p.get("marcflavor") is not None:
         p["marcflavor"] = normalize_marcflavor(p["marcflavor"])
-    if not NAME_RE.fullmatch(p["name"]):
-        raise ModuleInputError("name debe tener 1-11 caracteres: minúsculas, números o guion; debe comenzar por letra")
+    if not NAME_RE.fullmatch(instance or ""):
+        raise ModuleInputError("instance debe tener 1-11 caracteres: minúsculas, números o guion; debe comenzar por letra")
     if p["state"] not in ("present", "absent"):
         raise ModuleInputError("state debe ser present o absent")
     mode = p["db_mode"]
@@ -143,8 +145,8 @@ def validate_params(p):
         raise ModuleInputError("repair/reconfigure no admiten db_mode=request ni populate; la DB existente se reutiliza con --use-db")
     if (p.get("repair") or p.get("reconfigure")) and p.get("defaultsql"):
         raise ModuleInputError("repair/reconfigure no admiten defaultsql; --use-db conserva la DB existente y no importa SQL")
-    if (p.get("repair") or p.get("reconfigure")) and (p.get("confirm_name") != p.get("name") or not p.get("confirm_data_loss")):
-        raise ModuleInputError("repair/reconfigure requieren confirm_name igual a name y confirm_data_loss=true")
+    if (p.get("repair") or p.get("reconfigure")) and (confirmed_instance != instance or not p.get("confirm_data_loss")):
+        raise ModuleInputError("repair/reconfigure requieren confirm_instance igual a instance y confirm_data_loss=true")
     vhosts = p.get("vhosts") or {}
     if vhosts:
         if not re.fullmatch(r"\.?[A-Za-z0-9.-]+", vhosts.get("domain", "")):
