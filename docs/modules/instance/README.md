@@ -36,6 +36,13 @@ y huella de opciones no secretas. Una repetición idéntica no ejecuta
 Apache/DB no se verifican y `present` no significa onboarding web completado.
 `--check` solo informa el plan; no prueba dependencias ni servicios.
 
+Cuando `timezone` contiene una zona IANA y la DB es local (`dbhost` omitido o
+loopback), el módulo comprueba `CONVERT_TZ` y, si faltan tablas, las carga desde
+`/usr/share/zoneinfo` con el cliente administrativo local de MariaDB y reinicia
+MariaDB para activarlas. Se requiere `become: true` y `tzdata`. La provisión
+automática no modifica servidores MariaDB remotos; en esos casos falla con un
+diagnóstico explícito en lugar de dejar que Koha falle más tarde al conectar.
+
 ### Integración ejecutada
 
 Prueba real del 2026-10-18 en `koha-test`: controlador Python 3.14.8 con
@@ -93,7 +100,7 @@ con datos de origen no confiable.
 | `enable_sru`, `sru_port` | Flags SRU; desactivado por omisión, puerto default 7090. |
 | `database`, `dbhost`, `passwdfile` | `--database` (máx. 64), `--dbhost`, `--passwdfile`. |
 | `defaultsql`, `adminuser` | `--defaultsql`, `--adminuser`; adminuser es ID borrower en importación SQL, no crea cuenta. |
-| `template_cache_dir`, `timezone`, `upload_path`, `tmp_path` | Flags homónimos; omitidos para heredar defaults. |
+| `template_cache_dir`, `timezone`, `upload_path`, `tmp_path` | Flags homónimos; omitidos para heredar defaults. Una zona IANA también asegura las tablas de zonas horarias de MariaDB local. |
 | `message_broker.*` | Opciones `--mb-*`; omitidas si no se definen. No gestiona el servicio externo. |
 | `keep_cookies` | Repetición de `--keep-cookie`, serializada como array `KEEP_COOKIE`. |
 | `vhosts.*` | Variables `DOMAIN`, `OPACPORT`, `OPACPREFIX`, `OPACSUFFIX`, `INTRAPORT`, `INTRAPREFIX`, `INTRASUFFIX`. Si se omite, hereda `koha-sites.conf`. |

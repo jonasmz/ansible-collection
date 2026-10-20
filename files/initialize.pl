@@ -181,12 +181,28 @@ sub assert_capabilities {
         ['Koha::Patron::Category', undef, 'store'], ['Koha::Patron', undef, 'set_password'],
         ['Koha::ItemType', undef, 'store'], ['Koha::CirculationRules', undef, 'set_rules'],
         ['Koha::CirculationRules', undef, 'get_effective_rule'],
+        ['Koha::CirculationRules', undef, 'rule_kinds'],
     );
     my @missing = map { $_->[2] } grep {
         my ($class, $object, $method) = @$_;
         $object ? !$object->can($method) : !$class->can($method);
     } @required;
     die 'Installed Koha lacks required API capability: ' . join(', ', @missing) if @missing;
+}
+
+sub validate_circulation_rule_names {
+    my ($entries) = @_;
+    my $kinds = Koha::CirculationRules->rule_kinds();
+    die 'Installed Koha returned an invalid circulation rule catalog' unless ref($kinds) eq 'HASH';
+    my @unknown;
+    for my $entry (@$entries) {
+        push @unknown, grep { !exists $kinds->{$_} } keys %{$entry->{rules}};
+    }
+    if (@unknown) {
+        my %seen;
+        @unknown = grep { !$seen{$_}++ } @unknown;
+        die 'Unknown circulation rule name(s) for this Koha version: ' . join(', ', sort @unknown);
+    }
 }
 
 sub assert_existing_install_preferences {
@@ -368,6 +384,10 @@ sub initialize_install {
     assert_instance_database();
     my $installer = C4::Installer->new() or die 'C4::Installer could not connect to the instance database';
     assert_capabilities($installer);
+    # Validate against the installed Koha version before creating a schema or
+    # loading installer data. Invalid policies must not leave an avoidable
+    # partial installation behind.
+    validate_circulation_rule_names($request->{circulation_rules});
     my ($before, $info) = detect_state($installer);
     $INITIAL_STATE = $before unless defined $INITIAL_STATE;
     $OBSERVED_STATE = $before;

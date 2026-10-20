@@ -76,6 +76,65 @@ class InstanceLifecycleTest(unittest.TestCase):
         FakeAnsibleModule.check_mode = False
         self.module = load_module()
 
+    def test_named_timezone_is_loaded_into_local_mariadb_when_missing(self):
+        class Runner:
+            def __init__(self):
+                self.commands = []
+                self.query_count = 0
+
+            def get_bin_path(self, name, required=False):
+                return {"mariadb": "/usr/bin/mariadb", "mariadb-tzinfo-to-sql": "/usr/bin/mariadb-tzinfo-to-sql",
+                        "systemctl": "/usr/bin/systemctl"}.get(name)
+
+            def run_command(self, argv, **kwargs):
+                self.commands.append((argv, kwargs))
+                if "--execute" in argv:
+                    self.query_count += 1
+                    return 0, "0\n" if self.query_count == 1 else "1\n", ""
+                if argv[0].endswith("tzinfo-to-sql"):
+                    return 0, "INSERT INTO mysql.time_zone_name VALUES (...);", ""
+                if argv[0].endswith("mariadb") and "data" in kwargs:
+                    return 0, "", ""
+                if argv[0].endswith("systemctl"):
+                    return 0, "", ""
+                raise AssertionError("unexpected command: %r" % argv)
+
+        runner = Runner()
+        with mock.patch.object(self.module.os.path, "isfile", return_value=True):
+            changed = helper.ensure_mariadb_timezone(runner, "America/Argentina/Buenos_Aires", "localhost")
+        self.assertTrue(changed)
+        self.assertEqual(runner.query_count, 2)
+        self.assertTrue(any(argv[-2:] == ["restart", "mariadb"] for argv, _kwargs in runner.commands))
+
+    def test_named_timezone_is_idempotent_when_mariadb_already_knows_it(self):
+        class Runner:
+            def get_bin_path(self, name, required=False):
+                return {"mariadb": "/usr/bin/mariadb"}.get(name)
+
+            def run_command(self, argv, **kwargs):
+                return 0, "1\n", ""
+
+        self.assertFalse(helper.ensure_mariadb_timezone(Runner(), "America/Argentina/Buenos_Aires", "localhost"))
+
+    def test_named_timezone_refuses_implicit_remote_database_mutation(self):
+        with self.assertRaisesRegex(helper.ModuleInputError, "base remota"):
+            helper.ensure_mariadb_timezone(FakeAnsibleModule(), "America/Argentina/Buenos_Aires", "db.example.org")
+
+    def test_existing_instance_repairs_timezone_tables_before_noop_return(self):
+        params = {"name": "biblioteca", "state": "present", "db_mode": "create",
+                  "timezone": "America/Argentina/Buenos_Aires", "dbhost": "localhost"}
+        FakeAnsibleModule.params = params
+        marker = json.dumps({"fingerprint": self.module._safe_fingerprint(params)})
+        with mock.patch.object(self.module, "inspect_state", return_value=("present", {}, {})), \
+             mock.patch.object(self.module.os, "geteuid", return_value=0), \
+             mock.patch.object(self.module, "ensure_mariadb_timezone", return_value=True) as ensure_timezone, \
+             mock.patch("builtins.open", return_value=io.StringIO(marker)):
+            with self.assertRaises(ModuleExit) as raised:
+                self.module.main()
+        ensure_timezone.assert_called_once_with(mock.ANY, "America/Argentina/Buenos_Aires", "localhost")
+        self.assertTrue(raised.exception.result["changed"])
+        self.assertEqual(raised.exception.result["actions"], ["cargar tablas de zonas horarias MariaDB"])
+
     def test_apache_prerequisites_report_missing_apache_module_actionably(self):
         fake = types.SimpleNamespace(run_command=lambda argv, **kwargs: (0, " mpm_itk_module (shared)\n", ""))
         with mock.patch.object(self.module.os.path, "exists", return_value=True):
@@ -94,6 +153,12 @@ class InstanceLifecycleTest(unittest.TestCase):
             "MariaDB rechazó la autenticación; revise su configuración local sin compartir credenciales.",
         )
         self.assertNotIn("super-secret", self.module._safe_backend_failure_hint(output))
+
+    def test_vhost_hostname_results_treat_omitted_fields_as_empty(self):
+        self.assertEqual(
+            self.module._vhost_hostnames("koha", {"domain": ".example.org", "staff_suffix": "-staff"}),
+            ("koha.example.org", "koha-staff.example.org"),
+        )
 
     def _run_remove(self, check_mode=False):
         FakeAnsibleModule.check_mode = check_mode
@@ -144,6 +209,34 @@ class InstanceLifecycleTest(unittest.TestCase):
         self.assertTrue(raised.exception.result["changed"])
         self.assertEqual(raised.exception.result["actions"], ["koha-remove --keep-mysql", "koha-create --use-db"])
         self.assertNotEqual(fingerprint, "old-fingerprint")
+
+    def test_existing_db_credentials_reads_koha_conf_root_and_uses_supplied_secret(self):
+        import tempfile
+
+        xml = """<?xml version="1.0"?>
+<yazgfs><listen><server><config><timeout>30</timeout></config></server></listen>
+<config><database>koha_biblioteca</database><hostname>localhost</hostname>
+<user>old_user</user><pass>legacy/unsafe&amp;secret</pass></config></yazgfs>"""
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as stream:
+            stream.write(xml)
+            stream.flush()
+            record = self.module._existing_db_credentials(
+                stream.name,
+                "biblioteca",
+                {"username": "koha_biblioteca", "password": "Valid.Password-1"},
+            )
+        self.assertEqual(record, "biblioteca:koha_biblioteca:Valid.Password-1:koha_biblioteca:localhost\n")
+
+    def test_existing_db_credentials_parses_standard_yazgfs_structure(self):
+        import tempfile
+
+        xml = """<yazgfs><config><database>koha_biblioteca</database><hostname>db.internal</hostname>
+<user>koha_biblioteca</user><pass>Valid.Password-1</pass></config></yazgfs>"""
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as stream:
+            stream.write(xml)
+            stream.flush()
+            record = self.module._existing_db_credentials(stream.name, "biblioteca")
+        self.assertEqual(record, "biblioteca:koha_biblioteca:Valid.Password-1:koha_biblioteca:db.internal\n")
 
     def test_partial_repair_check_mode_plans_rebuild(self):
         FakeAnsibleModule.params = {"name": "biblioteca", "state": "present", "db_mode": "create",

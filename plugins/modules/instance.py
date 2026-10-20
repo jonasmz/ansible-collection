@@ -84,7 +84,7 @@ options:
     description: Mapea --template-cache-dir; default nativo /var/cache/koha/name/templates.
     type: path
   timezone:
-    description: Mapea --timezone; se omite para heredar el default vacío.
+    description: Mapea --timezone. Para zonas IANA en MariaDB local, asegura automáticamente las tablas de zonas horarias antes de crear/configurar la instancia.
     type: str
   upload_path:
     description: Mapea --upload-path; default nativo /var/lib/koha/name/uploads.
@@ -260,7 +260,7 @@ import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import (
-    ModuleInputError, build_argv, db_password_is_safe, inspect_state, normalize_marcflavor, render_config, validate_params,
+    ModuleInputError, build_argv, db_password_is_safe, ensure_mariadb_timezone, inspect_state, normalize_marcflavor, render_config, validate_params,
 )
 
 
@@ -315,13 +315,25 @@ def _write_private(path, content):
     os.chmod(path, 0o600)
 
 
-def _existing_db_credentials(config_path, name):
-    """Read DB fields from an existing Koha config without exposing them."""
+def _existing_db_credentials(config_path, name, credentials=None):
+    """Read the DB record from Koha config, preferring explicitly supplied secrets."""
     root = ET.parse(config_path).getroot()
+    # koha-conf.xml contains several unrelated <config> nodes inside its
+    # embedded YAZ server definitions. The DB settings live in the Koha-level
+    # config block, identified by its database/user/pass children.
+    configs = [node for node in root.iter("config")
+               if all(node.find(tag) is not None for tag in ("database", "user", "pass"))]
+    if len(configs) != 1:
+        raise ModuleInputError("koha-conf.xml no contiene un único bloque config con datos DB")
+    config = configs[0]
+
     def value(tag):
-        node = root.find(".//yazgfs/config/" + tag)
+        node = config.find(tag)
         return (node.text or "").strip() if node is not None else ""
-    username, password = value("user"), value("pass")
+
+    supplied = credentials or {}
+    username = supplied.get("username") or value("user")
+    password = supplied.get("password") or value("pass")
     database = value("database")
     host = value("hostname") or "localhost"
     if (not all((username, password, database)) or any("\n" in x or ":" in x for x in (username, password, database, host))
@@ -403,6 +415,14 @@ def _safe_backend_failure_hint(output):
     return "Revise los servicios y dependencias del host; la salida del backend se omitió por seguridad."
 
 
+def _vhost_hostnames(name, vhosts):
+    """Build reported hostnames while treating omitted nested options as empty."""
+    domain = vhosts["domain"].lstrip(".")
+    opac = "%s%s%s.%s" % (vhosts.get("opac_prefix") or "", name, vhosts.get("opac_suffix") or "", domain)
+    staff = "%s%s%s.%s" % (vhosts.get("staff_prefix") or "", name, vhosts.get("staff_suffix") or "", domain)
+    return opac, staff
+
+
 def main():
     module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
     p = module.params
@@ -413,6 +433,7 @@ def main():
     state_dir = "/var/lib/koha/%s" % name
     marker_path = os.path.join(state_dir, ".ansible-koha-instance-state")
     request_path = p.get("db_request_path") or os.path.join(state_dir, "%s-db-request.txt" % name)
+    timezone_changed = False
     try:
         validate_params(p)
         if p.get("vhosts"):
@@ -482,7 +503,8 @@ def main():
                 raise ModuleInputError("populate requiere estado requested coherente (config Koha, Apache, directorio y marcador de solicitud); estado detectado: %s" % detected)
         elif detected == "requested":
             raise ModuleInputError("la instancia está requested; use db_mode=populate tras preparar la base externa")
-        elif detected == "present":
+
+        if detected == "present":
             if p.get("repair"):
                 raise ModuleInputError("repair solo se aplica al estado partial; use reconfigure=true para cambiar configuración present")
             try:
@@ -494,7 +516,12 @@ def main():
             if changed_config and not p.get("reconfigure"):
                 raise ModuleInputError("la instancia existe con parámetros distintos (drift); use reconfigure=true junto con las dos confirmaciones para reconstruir su configuración preservando la DB")
             if not changed_config:
-                module.exit_json(changed=False, name=name, state="present", db_mode=mode, config_path=config_path, apache_site_path=apache_path, actions=[], notices=["La instancia está creada; koha-create no se ejecutó."])
+                if p.get("timezone") and mode != "request" and not module.check_mode:
+                    if os.geteuid() != 0:
+                        raise ModuleInputError("la carga de zonas horarias MariaDB requiere root; ejecute la tarea con become: true")
+                    timezone_changed = ensure_mariadb_timezone(module, p["timezone"], p.get("dbhost"))
+                actions = ["cargar tablas de zonas horarias MariaDB"] if timezone_changed else []
+                module.exit_json(changed=timezone_changed, name=name, state="present", db_mode=mode, config_path=config_path, apache_site_path=apache_path, actions=actions, notices=["La instancia está creada; koha-create no se ejecutó."])
             rebuild = True
         elif detected == "partial":
             if not p.get("repair"):
@@ -502,6 +529,14 @@ def main():
             rebuild = True
         elif p.get("repair") or p.get("reconfigure"):
             raise ModuleInputError("repair requiere state partial y reconfigure requiere una instancia present")
+
+        # Koha applies its configured IANA timezone to each MariaDB session.
+        # Provision the server's timezone tables here so a new or rebuilt
+        # local instance can connect without a manual database step.
+        if p.get("timezone") and mode != "request" and not module.check_mode:
+            if os.geteuid() != 0:
+                raise ModuleInputError("la carga de zonas horarias MariaDB requiere root; ejecute la tarea con become: true")
+            timezone_changed = ensure_mariadb_timezone(module, p["timezone"], p.get("dbhost"))
 
         binary = _find_binary(p.get("koha_create_path"))
         if not binary:
@@ -517,6 +552,8 @@ def main():
             raise ModuleInputError("Let's Encrypt de koha-create configura TLS en Apache; no lo use cuando HAProxy/proxy termina TLS")
         if module.check_mode:
             planned = ["koha-remove --keep-mysql", "koha-create --use-db"] if rebuild else ["ejecutar koha-create en modo %s" % mode]
+            if p.get("timezone") and mode != "request":
+                planned.insert(0, "asegurar tablas de zonas horarias MariaDB si hacen falta")
             module.exit_json(changed=True, name=name, state="requested" if mode == "request" else "present", db_mode="use" if rebuild else mode,
                              config_path=config_path, apache_site_path=apache_path,
                              actions=planned, notices=["Plan previsto; no se verificó que Apache/DB permitan completar la operación."])
@@ -557,7 +594,7 @@ def main():
             passwdfile = None
             existing_db_record = None
             if rebuild and os.path.isfile(config_path):
-                existing_db_record = _existing_db_credentials(config_path, name).strip().split(":")
+                existing_db_record = _existing_db_credentials(config_path, name, p.get("db_credentials")).strip().split(":")
                 if p.get("database") and p["database"] != existing_db_record[3]:
                     raise ModuleInputError("reconfigure no cambia de base de datos; database debe coincidir con la instancia actual")
                 if p.get("dbhost") and p["dbhost"] != existing_db_record[4]:
@@ -623,13 +660,12 @@ def main():
             os.chmod(marker_path, 0o600)
             result = {"changed": True, "name": name, "state": final_state, "db_mode": mode, "config_path": config_path, "apache_site_path": apache_path,
                       "actions": ["koha-create --%s" % mode], "notices": []}
+            if timezone_changed:
+                result["actions"].insert(0, "cargar tablas de zonas horarias MariaDB")
             if mode == "request" and not rebuild:
                 result["request_file"] = request_path
             if p.get("vhosts"):
-                v = p["vhosts"]
-                domain = v["domain"].lstrip(".")
-                result["opac_hostname"] = "%s%s%s.%s" % (v.get("opac_prefix", ""), name, v.get("opac_suffix", ""), domain)
-                result["staff_hostname"] = "%s%s%s.%s" % (v.get("staff_prefix", ""), name, v.get("staff_suffix", ""), domain)
+                result["opac_hostname"], result["staff_hostname"] = _vhost_hostnames(name, p["vhosts"])
             if rebuild:
                 result["db_mode"] = "use"
                 result["actions"] = ["koha-remove --keep-mysql", "koha-create --use-db"]
@@ -640,9 +676,13 @@ def main():
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
     except ModuleInputError as exc:
-        module.fail_json(msg=str(exc), name=name, state="unknown", db_mode=mode)
+        module.fail_json(msg=str(exc), name=name, state="unknown", db_mode=mode,
+                         changed=timezone_changed, partial=timezone_changed,
+                         actions=["cargar tablas de zonas horarias MariaDB"] if timezone_changed else [])
     except OSError as exc:
-        module.fail_json(msg="error de filesystem ejecutando la operación Koha (%s); se omitieron datos sensibles" % exc.__class__.__name__, name=name, state="unknown", db_mode=mode)
+        module.fail_json(msg="error de filesystem ejecutando la operación Koha (%s); se omitieron datos sensibles" % exc.__class__.__name__, name=name, state="unknown", db_mode=mode,
+                         changed=timezone_changed, partial=timezone_changed,
+                         actions=["cargar tablas de zonas horarias MariaDB"] if timezone_changed else [])
 
 
 if __name__ == "__main__":

@@ -233,7 +233,18 @@ def _query_languages(module, binary, mode, dev_instance):
         argv = [binary, "--list", "--available"] + _scope_args(dev_instance)
     else:
         raise TranslateError("unsupported language query: %s" % mode)
-    result = _command(module, argv, "language list query")
+    try:
+        result = _command(module, argv, "language list query")
+    except TranslateError as exc:
+        # Koha 26.05.x uses `set -e` and ends `--list` with grep -v. When
+        # there are no non-English translations installed, grep finds no
+        # lines and the script exits 1 without diagnostics. Treat that exact
+        # result as an empty installed-language list; other failures remain
+        # errors. The available-language query has different semantics.
+        result = exc.result
+        if not (mode == "installed" and result and result.get("rc") == 1
+                and not result.get("stdout") and not result.get("stderr")):
+            raise
     languages = []
     seen = set()
     for raw in result["stdout"].splitlines():
