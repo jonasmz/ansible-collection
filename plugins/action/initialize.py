@@ -1,86 +1,11 @@
 # SPDX-License-Identifier: MIT-0
-"""Stage the collection's standalone Koha Perl helper and invoke initialize."""
+"""Stage the collection's initialize.pl helper and invoke initialize."""
 
-import os
-import uuid
-
-from ansible.plugins.action import ActionBase
-from ansible.errors import AnsibleActionFail
+from ansible_collections.jmz.koha.plugins.plugin_utils.helper_action import HelperActionBase
 
 
-class ActionModule(ActionBase):
-    TRANSFERS_FILES = True
-
-    def run(self, tmp=None, task_vars=None):
-        result = super().run(tmp, task_vars)
-        staged = None
-        upload_tmp = None
-        try:
-            # ``_find_needle`` searches playbook/role paths. The helper is
-            # shipped with the collection itself, so resolve it relative to
-            # this action plugin on the controller instead.
-            collection_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            source = os.path.join(collection_root, "files", "initialize.pl")
-            if not os.path.isfile(source):
-                raise AnsibleActionFail("The collection helper files/initialize.pl is missing: %s" % source)
-            # Upload as the connection user first; the shared staging directory
-            # is created with become and populated by a privileged copy below.
-            upload_tmp = self._make_tmp_path()
-            upload_file = upload_tmp + "/initialize.pl"
-            self._transfer_file(source, upload_file)
-
-            staged_path = "/tmp/ansible-koha-initialize-%s" % uuid.uuid4().hex
-            staged = staged_path
-            directory_result = self._execute_module(
-                module_name="ansible.builtin.file",
-                module_args={"path": staged_path, "mode": "0711", "state": "directory"},
-                task_vars=task_vars,
-            )
-            if directory_result.get("failed"):
-                return directory_result
-            remote_file = staged + "/initialize.pl"
-            copy_result = self._execute_module(
-                module_name="ansible.builtin.command",
-                module_args={"argv": ["/usr/bin/cp", "--", upload_file, remote_file]},
-                task_vars=task_vars,
-            )
-            if copy_result.get("failed"):
-                return copy_result
-
-            # The helper contains no credentials. koha-shell changes to the
-            # instance account, so make only this temporary directory readable
-            # and traverseable, then remove it in the finally block.
-            file_result = self._execute_module(
-                module_name="ansible.builtin.file",
-                module_args={"path": remote_file, "mode": "0644", "state": "file"},
-                task_vars=task_vars,
-            )
-            if file_result.get("failed"):
-                return file_result
-            args = dict(self._task.args)
-            args["_initialize_helper"] = remote_file
-            return self._execute_module(
-                module_name="jmz.koha.initialize",
-                module_args=args,
-                task_vars=task_vars,
-                tmp=tmp,
-            )
-        except AnsibleActionFail:
-            raise
-        except Exception as exc:
-            raise AnsibleActionFail("Unable to stage or run the Koha initialize helper: %s" % exc)
-        finally:
-            if staged:
-                try:
-                    self._execute_module(
-                        module_name="ansible.builtin.file",
-                        module_args={"path": staged, "state": "absent"},
-                        task_vars=task_vars,
-                    )
-                except Exception:
-                    pass
-            if upload_tmp:
-                try:
-                    self._remove_tmp_path(upload_tmp, force=True)
-                except Exception:
-                    pass
+class ActionModule(HelperActionBase):
+    module_name = "jmz.koha.initialize"
+    helper_file = "initialize.pl"
+    helper_arg = "_initialize_helper"
+    prefix = "initialize"

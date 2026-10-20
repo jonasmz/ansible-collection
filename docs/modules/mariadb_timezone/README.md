@@ -18,17 +18,24 @@ las tablas de zonas horarias no existen, la conexión falla.
 | Parámetro | Tipo | Obligatorio | Semántica |
 | --- | --- | --- | --- |
 | `timezone` | string | sí | Zona IANA (`America/Argentina/Buenos_Aires`), `SYSTEM` u offset `±HH:MM`; los dos últimos no necesitan tablas. |
+| `restart` | boolean | no | `false` por defecto. Reinicia MariaDB solo si la zona no se resuelve tras cargar las tablas. |
 | `dbhost` | string | no | `localhost` (predeterminado) o loopback. Un host remoto falla: el módulo nunca modifica servidores remotos. |
 
 ## Comportamiento
 
 Comprueba con `CONVERT_TZ`. Si MariaDB ya conoce la zona, devuelve
-`changed: false`. Si no, carga las tablas desde `/usr/share/zoneinfo`, reinicia
-MariaDB para activarlas y vuelve a comprobar. **El reinicio afecta a todas las
-bases del servidor**; planifique la ejecución en consecuencia. Check mode solo
-consulta e informa si se cargarían.
+`changed: false`. Si no, carga las tablas desde `/usr/share/zoneinfo` y vuelve a
+comprobar. En MariaDB 10.11 (verificado con Koha 26.05 en molecule) las tablas
+cargadas se usan de inmediato, **sin reiniciar el servidor**: el módulo lo
+comprueba comparando el `Uptime` antes y después.
 
-`jmz.koha.initialize` usa la misma utilidad para reparar las tablas de la zona
-que figura en `koha-conf.xml` de la instancia.
+Si tras la carga la zona sigue sin resolverse, falla e indica repetir con
+`restart: true`. Solo con ese parámetro reinicia MariaDB, lo que **corta las
+conexiones de todas las bases del servidor**. Está desactivado por defecto porque
+otras versiones o MySQL podrían necesitarlo y no se han probado. Check mode solo
+consulta e informa si se cargarían las tablas.
+
+`jmz.koha.initialize` ya no carga estas tablas: si Koha no puede conectar por una
+zona horaria desconocida, su error remite a este módulo.
 
 Retorno: `timezone` y `loaded`.

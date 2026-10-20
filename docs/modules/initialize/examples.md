@@ -16,7 +16,7 @@ usar `no_log: true`.
     instance: biblioteca
     state: present
     language: es-ES
-    marcflavor: MARC21
+    marcflavor: marc21
     library:
       code: CENTRAL
       name: Biblioteca Central
@@ -66,7 +66,7 @@ de regla válidos y sus ámbitos para la versión instalada de Koha.
   jmz.koha.initialize:
     instance: biblioteca
     language: es-ES
-    marcflavor: UNIMARC
+    marcflavor: unimarc
     sample_data:
       - "optional/sample_biblios.sql"
     # library, patron_categories, administrator, item_types y circulation_rules
@@ -101,7 +101,7 @@ del parámetro `sample_data`.
   jmz.koha.initialize:
     instance: biblioteca
     language: es-ES
-    marcflavor: MARC21
+    marcflavor: marc21
     library:
       code: CENTRAL
       name: Biblioteca Central
@@ -111,8 +111,10 @@ del parámetro `sample_data`.
   no_log: true
 ```
 
-El plan es parcial: no se escribe en la base, y los conflictos de atributos o
-reglas se verifican durante una ejecución normal.
+No se escribe en la base. Sobre una instancia con el onboarding pendiente o ya
+inicializada, el plan es completo y detecta los mismos conflictos que una
+ejecución real; antes de instalar el esquema solo puede informar las acciones
+previstas (`partial: true`).
 
 ## Idempotencia y manejo de fallos parciales
 

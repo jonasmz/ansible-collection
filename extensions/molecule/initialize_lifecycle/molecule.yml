@@ -1,0 +1,63 @@
+---
+# initialize against a real Koha database inside a systemd container.
+# Run from the collection root: molecule test -s initialize_lifecycle
+dependency:
+  name: galaxy
+driver:
+  name: podman
+platforms:
+  - name: koha-initialize
+    # Built once by extensions/molecule/image/build.sh (Koha, MariaDB, Apache preinstalled).
+    image: localhost/koha-molecule:26.05
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    systemd: always
+    privileged: true
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      callbacks_enabled: ansible.posix.profile_tasks
+  inventory:
+    group_vars:
+      all:
+        koha_instance: molecule
+        koha_second_instance: second
+        # Shorter than a fresh schema load, to interrupt initialize half way.
+        koha_timeout_seconds: 5
+        koha_init:
+          language: en
+          marcflavor: MARC21
+          library: {code: CENTRAL, name: Biblioteca Central}
+          patron_categories:
+            - {code: STAFF, description: Personal, type: S, enrolment_period: 1, default_privacy: default}
+            - {code: ADULT, description: Adultos, type: A, enrolment_period: 1, default_privacy: default}
+          administrator:
+            username: admin
+            firstname: Ada
+            surname: Koha
+            cardnumber: ADMIN01
+            library: CENTRAL
+            category: STAFF
+            email: admin@example.test
+            password: Molecule-Pass-1234
+          item_types:
+            - {code: BOOK, description: Libros}
+          circulation_rules:
+            - library: CENTRAL
+              category: ADULT
+              item_type: BOOK
+              rules: {issuelength: 14, lengthunit: days, maxissueqty: 5, renewalsallowed: 2}
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy
+verifier:
+  name: ansible

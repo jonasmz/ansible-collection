@@ -7,10 +7,11 @@ import re
 from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import ModuleInputError
 
 
-def ensure_mariadb_timezone(module, timezone, dbhost, apply=True):
+def ensure_mariadb_timezone(module, timezone, dbhost, apply=True, restart=False):
     """Load local MariaDB timezone tables when a named Koha timezone is missing.
 
-    Returns whether the tables were (or, with ``apply=False``, would be) loaded.
+    Returns whether the tables were (or, with ``apply=False``, would be) loaded. MariaDB is only
+    restarted when the zone still does not resolve after loading and ``restart`` is true.
     """
     if not timezone or timezone == "SYSTEM" or re.fullmatch(r"[+-]\d{2}:\d{2}", timezone):
         return False
@@ -51,6 +52,13 @@ def ensure_mariadb_timezone(module, timezone, dbhost, apply=True):
     rc, _stdout, _stderr = module.run_command([client, "--protocol=socket", "mysql"], data=sql, check_rc=False)
     if rc != 0:
         raise ModuleInputError("MariaDB rechazó la carga automática de sus tablas de zonas horarias")
+
+    rc, stdout, _stderr = module.run_command(query_argv, check_rc=False)
+    if rc == 0 and stdout.strip() == "1":
+        return True
+    if not restart:
+        raise ModuleInputError("las tablas de zonas horarias se cargaron, pero MariaDB aún no reconoce %s; "
+                               "repita con restart: true para reiniciar MariaDB y activarlas" % timezone)
 
     systemctl = module.get_bin_path("systemctl", required=False)
     service = module.get_bin_path("service", required=False)

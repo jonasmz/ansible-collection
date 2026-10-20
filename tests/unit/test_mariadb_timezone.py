@@ -80,11 +80,29 @@ class MariadbTimezoneTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_tables_are_loaded_when_missing(self):
+    def restarted(self, runner):
+        return any(argv[-2:] == ["restart", "mariadb"] for argv, _ in runner.commands)
+
+    def test_tables_are_loaded_without_restarting_mariadb(self):
         runner = Runner(known_after=2)
         self.assertTrue(self.util.ensure_mariadb_timezone(runner, "America/Argentina/Buenos_Aires", "localhost"))
         self.assertEqual(runner.queries, 2)
-        self.assertTrue(any(argv[-2:] == ["restart", "mariadb"] for argv, _ in runner.commands))
+        self.assertFalse(self.restarted(runner))
+
+    def test_zone_that_still_does_not_resolve_fails_and_asks_for_restart(self):
+        runner = Runner(known_after=3)
+        with self.assertRaisesRegex(self.helper.ModuleInputError, "restart: true"):
+            self.util.ensure_mariadb_timezone(runner, "America/Argentina/Buenos_Aires", "localhost")
+        self.assertFalse(self.restarted(runner))
+
+    def test_restart_happens_only_when_requested_and_needed(self):
+        runner = Runner(known_after=3)
+        self.assertTrue(self.util.ensure_mariadb_timezone(runner, "America/Argentina/Buenos_Aires", "localhost", restart=True))
+        self.assertTrue(self.restarted(runner))
+        self.assertEqual(runner.queries, 3)
+        resolves_already = Runner(known_after=2)
+        self.util.ensure_mariadb_timezone(resolves_already, "America/Argentina/Buenos_Aires", "localhost", restart=True)
+        self.assertFalse(self.restarted(resolves_already))
 
     def test_nothing_happens_when_mariadb_already_knows_the_zone(self):
         runner = Runner(known_after=1)
@@ -105,7 +123,7 @@ class MariadbTimezoneTest(unittest.TestCase):
             self.util.ensure_mariadb_timezone(Runner(), "America/Argentina/Buenos_Aires", "db.example.org")
 
     def run_module(self, check_mode=False, **params):
-        FakeAnsibleModule.params = dict({"timezone": "America/Argentina/Buenos_Aires", "dbhost": "localhost"}, **params)
+        FakeAnsibleModule.params = dict({"timezone": "America/Argentina/Buenos_Aires", "dbhost": "localhost", "restart": False}, **params)
         FakeAnsibleModule.check_mode = check_mode
         with mock.patch.object(self.module.os, "geteuid", return_value=0), \
              mock.patch.object(self.module, "ensure_mariadb_timezone", return_value=True) as ensure:
@@ -117,6 +135,11 @@ class MariadbTimezoneTest(unittest.TestCase):
         result, ensure = self.run_module()
         self.assertTrue(result["changed"])
         self.assertTrue(ensure.call_args.kwargs["apply"])
+        self.assertFalse(ensure.call_args.kwargs["restart"])
+
+    def test_module_passes_the_restart_opt_in(self):
+        _, ensure = self.run_module(restart=True)
+        self.assertTrue(ensure.call_args.kwargs["restart"])
 
     def test_module_check_mode_does_not_apply(self):
         result, ensure = self.run_module(check_mode=True)

@@ -2,7 +2,6 @@
 """Instance state inspection, ownership marker and per-instance lock for the instance module."""
 
 import contextlib
-import fcntl
 import grp
 import hashlib
 import json
@@ -10,11 +9,10 @@ import os
 import pwd
 import tempfile
 
-from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import ModuleInputError
+from ansible_collections.jmz.koha.plugins.module_utils.koha_lock import exclusive_lock
 
 
 MARKER_SCHEMA = 2
-LOCK_DIR = "/run/lock"
 COMPLETE_RESOURCES = ("config", "apache", "site_dir", "user", "group")
 # Only options that shape the generated Koha configuration belong in the
 # fingerprint. Operation inputs (db_mode, binary and request paths, credentials)
@@ -77,19 +75,9 @@ def remove_marker(path):
         os.unlink(path)
 
 
-@contextlib.contextmanager
 def instance_lock(name):
     """Serialize mutations of one instance across concurrent runs."""
-    path = os.path.join(LOCK_DIR, "ansible-koha-instance-%s.lock" % name)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            raise ModuleInputError("otra ejecución está modificando la instancia %s; reintente cuando termine" % name)
-        yield
-    finally:
-        os.close(fd)
+    return exclusive_lock("instance", name, "otra ejecución está modificando la instancia %s; reintente cuando termine" % name)
 
 
 def inspect_state(name, marker_path, request_path):

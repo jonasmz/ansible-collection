@@ -4,11 +4,16 @@ releases:
     changes:
       minor_changes:
         - Add the smtp module to add a Koha SMTP server and set it as the default without touching the packaged default.
-        - Add the mariadb_timezone module; instance no longer loads MariaDB timezone tables or restarts MariaDB.
+        - Add the mariadb_timezone module; instance no longer loads MariaDB timezone tables or restarts MariaDB, and the module restarts it only when restart=true and the loaded tables are not enough.
         - Add adopt to instance to register an existing complete instance without rebuilding it.
         - Rebuild (repair/reconfigure) now backs up and, on failure, restores the instance configuration, reports partial progress, and instance serializes runs with a lock.
+        - initialize, smtp and localization now work in check mode (their action plugins share one helper-staging base), and initialize check mode reports the entities a real run would create.
         - instance state=absent can now remove a partial instance whose /etc/koha/sites directory is gone.
+        - initialize validates duplicate codes and circulation rule scopes, restricts rule values to scalars, counts superlibrarians in SQL, compares numeric rule values numerically, and reports scrubbed helper stderr when the helper does not answer.
       breaking_changes:
+        - initialize no longer loads MariaDB timezone tables or restarts MariaDB (that code never matched a real koha-conf.xml); run mariadb_timezone first.
+        - initialize marcflavor takes marc21/unimarc like instance (any case still works); the marc_flavour and maxissuesqty aliases are removed.
+        - initialize only masks administrator.password in output, no longer every administrator value.
         - instance no longer accepts the name and confirm_name aliases and no longer returns name; use instance and confirm_instance.
         - instance state markers use schema_version 2; instances created by earlier builds must be registered again with adopt.
   1.0.0:

@@ -62,7 +62,7 @@ def load_modules():
     fakes["ansible.module_utils.basic"].AnsibleModule = FakeAnsibleModule
     with mock.patch.dict(sys.modules, fakes):
         loaded = {name: _load("plugins/module_utils/%s.py" % name, "%s.%s" % (PACKAGE, name))
-                  for name in ("koha_instance", "koha_instance_state", "koha_instance_backend")}
+                  for name in ("koha_instance", "koha_lock", "koha_instance_state", "koha_instance_backend")}
         loaded["instance"] = _load("plugins/modules/instance.py", "instance_module_test")
     return loaded
 
@@ -80,6 +80,7 @@ class Base(unittest.TestCase):
         loaded = load_modules()
         self.ki = loaded["koha_instance"]
         self.state = loaded["koha_instance_state"]
+        self.lock = loaded["koha_lock"]
         self.backend = loaded["koha_instance_backend"]
         self.module = loaded["instance"]
         FakeAnsibleModule.results = []
@@ -174,7 +175,7 @@ class StateTest(Base):
             self.assertEqual(self.state.read_marker(path), {})
 
     def test_second_run_cannot_take_the_instance_lock(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(self.state, "LOCK_DIR", tmp):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(self.lock, "LOCK_DIR", tmp):
             with self.state.instance_lock("biblioteca"):
                 with self.assertRaisesRegex(self.ki.ModuleInputError, "otra ejecución"):
                     with self.state.instance_lock("biblioteca"):

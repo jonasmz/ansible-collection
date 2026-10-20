@@ -42,7 +42,7 @@
         instance: "{{ koha_instance }}"
         state: present
         language: en
-        marcflavor: MARC21
+        marcflavor: marc21
         library:
           code: "{{ koha_library_code }}"
           name: Biblioteca Central

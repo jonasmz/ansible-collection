@@ -26,10 +26,15 @@ class FakeAnsibleModule:
     params = {}
     check_mode = False
 
+    diff = False
+
+    spec = {}
+
     def __init__(self, **kwargs):
         self.params = dict(type(self).params)
         self.check_mode = type(self).check_mode
-        self._diff = False
+        self._diff = type(self).diff
+        type(self).spec = kwargs
 
     def exit_json(self, **kwargs):
         raise ModuleExit(kwargs)
@@ -81,19 +86,22 @@ def load_module():
     )
     module = importlib.util.module_from_spec(spec)
     with mock.patch.dict(sys.modules, module_map):
-        tz_spec = importlib.util.spec_from_file_location(
-            "mariadb_timezone_test", os.path.join(ROOT, "plugins/module_utils/mariadb_timezone.py"))
-        tz_helper = importlib.util.module_from_spec(tz_spec)
-        tz_spec.loader.exec_module(tz_helper)
-        sys.modules["ansible_collections.jmz.koha.plugins.module_utils.mariadb_timezone"] = tz_helper
+        lock_spec = importlib.util.spec_from_file_location(
+            "koha_lock_test", os.path.join(ROOT, "plugins/module_utils/koha_lock.py"))
+        lock_helper = importlib.util.module_from_spec(lock_spec)
+        lock_spec.loader.exec_module(lock_helper)
+        sys.modules["ansible_collections.jmz.koha.plugins.module_utils.koha_lock"] = lock_helper
         spec.loader.exec_module(module)
     return module
+
+
+HELPER = "/tmp/ansible-koha-initialize-%s/initialize.pl" % ("a" * 32)
 
 
 def valid_params():
     return {
         "instance": "biblioteca", "state": "present", "language": "es-ES",
-        "marc_flavour": "MARC21", "sample_data": [],
+        "marcflavor": "marc21", "sample_data": [],
         "library": {"code": "CENTRAL", "name": "Biblioteca Central"},
         "patron_categories": [
             {"code": "STAFF", "description": "Personal", "type": "S", "enrolment_period": 1,
@@ -107,7 +115,7 @@ def valid_params():
         "item_types": [{"code": "BOOK", "description": "Libros"}],
         "circulation_rules": [{"library": "CENTRAL", "category": "ADULT", "item_type": "BOOK",
                                "rules": {"issuelength": 14}}],
-        "timeout": 1800, "_initialize_helper": "/tmp/helper.pl",
+        "timeout": 1800, "_initialize_helper": HELPER,
     }
 
 
@@ -140,17 +148,12 @@ class InitializeModuleTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.InitializeError, "language"):
             self.module._validate_params(fake)
 
-    def test_circulation_rule_names_normalize_common_case_and_spelling(self):
+    def test_circulation_rule_names_normalize_case(self):
         fake = FakeAnsibleModule()
-        fake.params["circulation_rules"][0]["rules"] = {
-            "issueLength": 14, "lengthUnit": "days", "maxissuesqty": 5,
-            "renewalSallowed": 2,
-        }
+        fake.params["circulation_rules"][0]["rules"] = {"issueLength": 14, "lengthUnit": "days", "renewalSallowed": 2}
         self.module._validate_params(fake)
-        self.assertEqual(fake.params["circulation_rules"][0]["rules"], {
-            "issuelength": 14, "lengthunit": "days", "maxissueqty": 5,
-            "renewalsallowed": 2,
-        })
+        self.assertEqual(fake.params["circulation_rules"][0]["rules"],
+                         {"issuelength": 14, "lengthunit": "days", "renewalsallowed": 2})
 
     def test_inspect_does_not_require_onboarding_inputs(self):
         fake = FakeAnsibleModule()
@@ -160,63 +163,236 @@ class InitializeModuleTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.InitializeError, "no acepta"):
             self.module._validate_params(fake)
 
-    def test_instance_timezone_is_repaired_from_koha_conf(self):
-        conf = os.path.join(ROOT, "tests/unit/fixtures/koha-conf-timezone.xml")
-        os.makedirs(os.path.dirname(conf), exist_ok=True)
-        with open(conf, "w", encoding="utf-8") as stream:
-            stream.write("<yazgfs><timezone>America/Argentina/Buenos_Aires</timezone>"
-                         "<database><hostname>localhost</hostname></database></yazgfs>")
-        try:
-            fake = mock.Mock()
-            with mock.patch.object(self.module, "ensure_mariadb_timezone", return_value=True) as ensure:
-                self.assertTrue(self.module._ensure_instance_timezone(fake, conf))
-            ensure.assert_called_once_with(fake, "America/Argentina/Buenos_Aires", "localhost")
-        finally:
-            os.unlink(conf)
+    def test_circulation_rule_names_are_lowercased_and_typo_alias_is_gone(self):
+        fake = FakeAnsibleModule()
+        fake.params["circulation_rules"][0]["rules"] = {"issueLength": 14, "maxissueqty": 5}
+        self.module._validate_params(fake)
+        self.assertEqual(fake.params["circulation_rules"][0]["rules"], {"issuelength": 14, "maxissueqty": 5})
+        fake.params["circulation_rules"][0]["rules"] = {"maxissuesqty": 5}
+        self.module._validate_params(fake)
+        self.assertEqual(list(fake.params["circulation_rules"][0]["rules"]), ["maxissuesqty"])
 
-    def test_present_ensures_timezone_before_koha_state_probe(self):
-        events = []
-        lock = mock.Mock()
-        lock.fileno.return_value = 9
-        payloads = [
-            {"state": "onboarding_required"},
-            {"current_state": "initialized", "previous_state": "onboarding_required", "changed": True},
-        ]
+    def test_duplicates_and_non_scalar_rule_values_are_rejected(self):
+        cases = (
+            ("patron_categories", lambda p: p["patron_categories"].append(dict(p["patron_categories"][0], description="Otra")), "patron_categories contiene códigos repetidos"),
+            ("item_types", lambda p: p["item_types"].append({"code": "BOOK", "description": "Otra"}), "item_types contiene códigos repetidos"),
+            ("scope", lambda p: p["circulation_rules"].append(dict(p["circulation_rules"][0])), "repite el ámbito"),
+            ("dict value", lambda p: p["circulation_rules"][0]["rules"].update(issuelength={"a": 1}), "texto, número o booleano"),
+            ("list value", lambda p: p["circulation_rules"][0]["rules"].update(issuelength=[1]), "texto, número o booleano"),
+            ("case duplicate", lambda p: p["circulation_rules"][0]["rules"].update(IssueLength=7), "nombres duplicados"),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name):
+                fake = FakeAnsibleModule()
+                fake.params = valid_params()
+                mutate(fake.params)
+                with self.assertRaisesRegex(self.module.InitializeError, message):
+                    self.module._validate_params(fake)
 
-        def read_protocol(*_args, **_kwargs):
-            events.append("koha")
-            return payloads.pop(0)
+    def test_explicit_null_onboarding_parameters_are_rejected_not_crashed(self):
+        for name in ("language", "marcflavor", "library", "patron_categories", "administrator", "item_types", "circulation_rules"):
+            with self.subTest(name=name):
+                fake = FakeAnsibleModule()
+                fake.params = dict(valid_params(), **{name: None})
+                with self.assertRaisesRegex(self.module.InitializeError, "%s es obligatorio" % name):
+                    self.module._validate_params(fake)
 
+    def test_inspect_rejects_every_onboarding_parameter(self):
+        for extra in ({"language": "en"}, {"marcflavor": "marc21"}, {"sample_data": ["x/y.sql"]},
+                      {"library": {"code": "A", "name": "B"}}):
+            with self.subTest(extra=extra):
+                fake = FakeAnsibleModule()
+                fake.params = dict({"instance": "biblioteca", "state": "inspect", "sample_data": []}, **extra)
+                with self.assertRaisesRegex(self.module.InitializeError, "no acepta"):
+                    self.module._validate_params(fake)
+
+    def test_argument_spec_requires_onboarding_for_present_and_has_no_legacy_aliases(self):
+        self.module.main.__globals__["AnsibleModule"] = FakeAnsibleModule
         FakeAnsibleModule.params = valid_params()
-        FakeAnsibleModule.params["circulation_rules"][0]["rules"] = {
-            "issueLength": 14, "lengthUnit": "days", "maxissuesqty": 5,
-            "renewalSallowed": 2,
-        }
+        with self.assertRaises(Exception):
+            self.module.main()
+        spec = FakeAnsibleModule.spec
+        self.assertEqual(spec["required_if"][0][:2], ("state", "present"))
+        self.assertEqual(set(spec["required_if"][0][2]),
+                         {"language", "marcflavor", "library", "patron_categories", "administrator", "item_types", "circulation_rules"})
+        arguments = spec["argument_spec"]
+        self.assertNotIn("aliases", arguments["marcflavor"])
+        self.assertEqual(arguments["marcflavor"]["choices"], ["marc21", "unimarc"])
+        self.assertFalse(arguments["administrator"].get("no_log"))
+        self.assertTrue(arguments["administrator"]["options"]["password"]["no_log"])
+
+    def test_marc_flavour_is_sent_to_koha_in_uppercase(self):
+        requests = []
+
+        def read_protocol(_module, _command, request, _timeout):
+            requests.append(request)
+            return {"state": "onboarding_required"} if request["operation"] == "inspect" else {"current_state": "initialized"}
+
+        self._run_with_protocol(read_protocol)
+        self.assertEqual(requests[1]["marc_flavour"], "MARC21")
+
+    def test_no_helper_json_surfaces_scrubbed_stderr_and_timezone_hint(self):
+        stderr = b"Can't locate Koha/Foo.pm\x07 secret-pass\nUnknown or incorrect time zone: 'Europe/Madrid'"
+        process = FakeProcess(stdout=b"", stderr=stderr)
+        process.returncode = 2
+        request = {"protocol": 1, "operation": "inspect", "administrator": {"password": "secret-pass"}}
+        with mock.patch.object(self.module.subprocess, "Popen", return_value=process):
+            with self.assertRaises(self.module.InitializeError) as raised:
+                self.module._read_protocol(mock.Mock(), ["koha-shell"], request, 3)
+        message = str(raised.exception)
+        self.assertIn("Can't locate Koha/Foo.pm", message)
+        self.assertNotIn("secret-pass", message)
+        self.assertNotIn("\x07", message)
+        self.assertIn("jmz.koha.mariadb_timezone", message)
+        self.assertTrue(raised.exception.details["indeterminate"])
+
+    def test_helper_reported_timezone_error_gets_the_same_hint(self):
+        failed = FakeProcess(stdout=b'{"protocol":1,"ok":false,"error":{"type":"koha_operation_failed","message":"Unknown or incorrect time zone: x"}}')
+        failed.returncode = 2
+        with mock.patch.object(self.module.subprocess, "Popen", return_value=failed):
+            with self.assertRaisesRegex(self.module.InitializeError, "mariadb_timezone"):
+                self.module._read_protocol(mock.Mock(), ["koha-shell"], {"protocol": 1}, 3)
+
+    def run_main(self, protocol, diff=False):
+        """Run main() with the Koha host mocked; ``protocol`` answers or raises per helper call."""
+        FakeAnsibleModule.params = valid_params()
+        FakeAnsibleModule.diff = diff
+        calls = []
+
+        def read_protocol(_module, _command, request, _timeout):
+            calls.append(request["operation"])
+            answer = protocol.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        self.addCleanup(setattr, FakeAnsibleModule, "diff", False)
+        return self._run_with_protocol(read_protocol), calls
+
+    def _run_with_protocol(self, read_protocol):
         with mock.patch.object(self.module.os.path, "isfile", return_value=True), \
              mock.patch.object(self.module.os.path, "islink", return_value=False), \
-             mock.patch.object(self.module.os.path, "realpath", return_value="/tmp/initialize.pl"), \
+             mock.patch.object(self.module.os.path, "realpath", side_effect=lambda path: path), \
              mock.patch.object(self.module.os, "access", return_value=True), \
              mock.patch.object(self.module.os, "geteuid", return_value=0), \
              mock.patch.object(self.module.os, "stat", return_value=mock.Mock(st_mode=self.module.stat.S_IRUSR)), \
-             mock.patch.object(self.module.os, "open", return_value=9), \
-             mock.patch.object(self.module.os, "fdopen", return_value=self.module.contextlib.nullcontext(lock)), \
+             mock.patch.object(self.module, "exclusive_lock", side_effect=lambda *_: self.module.contextlib.nullcontext()), \
              mock.patch.object(self.module.os.path, "isdir", return_value=True), \
-             mock.patch.object(self.module, "_ensure_instance_timezone", side_effect=lambda *_: events.append("timezone") or True), \
-             mock.patch.object(self.module, "_read_protocol", side_effect=read_protocol) as protocol_mock, \
+             mock.patch.object(self.module, "_read_protocol", side_effect=read_protocol), \
              mock.patch.object(self.module.pwd, "getpwnam"), \
-             mock.patch.object(self.module.fcntl, "flock"), \
              mock.patch.object(FakeAnsibleModule, "get_bin_path", return_value="/usr/sbin/koha-shell", create=True):
             with self.assertRaises(ModuleExit) as raised:
                 self.module.main()
+        return raised.exception.result
 
-        self.assertEqual(events, ["timezone", "koha", "koha"])
-        self.assertTrue(raised.exception.result["changed"])
-        resume_request = protocol_mock.call_args_list[1].args[2]
-        self.assertEqual(resume_request["operation"], "initialize")
-        self.assertEqual(resume_request["circulation_rules"][0]["rules"], {
-            "issuelength": 14, "lengthunit": "days", "maxissueqty": 5,
-            "renewalsallowed": 2,
-        })
+    def indeterminate(self, message):
+        return self.module.InitializeError(message, {"indeterminate": True})
+
+    def test_timeout_during_initialize_reports_the_state_it_left_behind(self):
+        result, calls = self.run_main([{"state": "uninitialized"}, self.indeterminate("koha-shell excedió el límite de 1800 segundos"),
+                                       {"state": "onboarding_required"}])
+        self.assertEqual(calls, ["inspect", "initialize", "inspect"])
+        self.assertTrue(result["changed"] and result["partial"])
+        self.assertEqual((result["previous_state"], result["current_state"]), ("uninitialized", "onboarding_required"))
+        self.assertIn("observado tras el fallo: onboarding_required", result["msg"])
+
+    def test_invalid_helper_output_without_state_change_is_not_reported_as_a_change(self):
+        result, _ = self.run_main([{"state": "onboarding_required"}, self.indeterminate("El helper Perl no devolvió JSON válido (rc=2)"),
+                                   {"state": "onboarding_required"}])
+        self.assertFalse(result["changed"])
+        self.assertFalse(result["partial"])
+        self.assertEqual(result["current_state"], "onboarding_required")
+
+    def test_failure_that_cannot_be_observed_is_reported_conservatively(self):
+        result, _ = self.run_main([{"state": "uninitialized"}, self.indeterminate("koha-shell excedió el límite"),
+                                   self.module.InitializeError("sin conexión")])
+        self.assertTrue(result["changed"] and result["partial"])
+        self.assertIn("No se pudo determinar", result["msg"])
+
+    def test_failure_reported_by_the_helper_is_trusted_without_a_second_probe(self):
+        failure = self.module.InitializeError("koha_operation_failed: boom", {
+            "changed": True, "partial": True, "phase": "onboarding", "actions": ["schema_created"],
+            "previous_state": "uninitialized", "current_state": "onboarding_required"})
+        result, calls = self.run_main([{"state": "uninitialized"}, failure])
+        self.assertEqual(calls, ["inspect", "initialize"])
+        self.assertEqual((result["actions"], result["phase"], result["partial"]), (["schema_created"], "onboarding", True))
+
+    def test_check_mode_asks_the_helper_for_a_dry_run_and_reports_its_plan(self):
+        FakeAnsibleModule.check_mode = True
+        self.addCleanup(setattr, FakeAnsibleModule, "check_mode", False)
+        requests = []
+        plan = {"changed": True, "complete": True, "actions": ["item_type_created:DVD"], "state_info": {"item_types": 1}}
+
+        def read_protocol(_module, _command, request, _timeout):
+            requests.append(request)
+            return {"state": "initialized"} if request["operation"] == "inspect" else plan
+
+        FakeAnsibleModule.params = valid_params()
+        result = self._run_with_protocol(read_protocol)
+        self.assertEqual([r["operation"] for r in requests], ["inspect", "initialize"])
+        self.assertIs(requests[1]["apply"], False)
+        self.assertTrue(result["changed"] and result["planned"])
+        self.assertFalse(result["partial"])
+        self.assertEqual((result["actions"], result["previous_state"], result["current_state"]),
+                         (["item_type_created:DVD"], "initialized", "initialized"))
+
+    def test_check_mode_before_the_installer_ran_is_an_incomplete_plan(self):
+        FakeAnsibleModule.check_mode = True
+        self.addCleanup(setattr, FakeAnsibleModule, "check_mode", False)
+        plan = {"changed": True, "complete": False, "actions": ["schema_created", "initial_data_loaded"]}
+        result = self._run_with_protocol(lambda _m, _c, request, _t: {"state": "uninitialized"} if request["operation"] == "inspect" else plan)
+        self.assertTrue(result["changed"] and result["partial"])
+        self.assertIn("no se puede simular", result["msg"])
+
+    def test_check_mode_with_nothing_to_do_reports_no_change(self):
+        FakeAnsibleModule.check_mode = True
+        self.addCleanup(setattr, FakeAnsibleModule, "check_mode", False)
+        plan = {"changed": False, "complete": True, "actions": []}
+        result = self._run_with_protocol(lambda _m, _c, request, _t: {"state": "initialized"} if request["operation"] == "inspect" else plan)
+        self.assertFalse(result["changed"])
+        self.assertEqual(result["actions"], [])
+
+    def test_real_run_asks_the_helper_to_apply(self):
+        requests = []
+
+        def read_protocol(_module, _command, request, _timeout):
+            requests.append(request)
+            return {"state": "onboarding_required"} if request["operation"] == "inspect" else {"current_state": "initialized"}
+
+        FakeAnsibleModule.params = valid_params()
+        self._run_with_protocol(read_protocol)
+        self.assertIs(requests[1]["apply"], True)
+
+    def test_helper_path_must_be_the_staged_one(self):
+        FakeAnsibleModule.params = dict(valid_params(), _initialize_helper="/tmp/evil/initialize.pl")
+        result = self._run_with_protocol(lambda *_: {"state": "initialized"})
+        self.assertIn("helper Perl temporal", result["msg"])
+
+    def test_success_returns_diff_only_when_requested(self):
+        answers = lambda: [{"state": "onboarding_required"}, {"current_state": "initialized", "previous_state": "onboarding_required",
+                                                             "changed": True, "actions": ["library_created:CENTRAL"]}]
+        plain, _ = self.run_main(answers())
+        self.assertNotIn("diff", plain)
+        with_diff, _ = self.run_main(answers(), diff=True)
+        self.assertEqual(with_diff["diff"], {"before": "onboarding_required", "after": "initialized"})
+        self.assertEqual(with_diff["actions"], ["library_created:CENTRAL"])
+
+    def test_protocol_failures_without_a_usable_answer_are_marked_indeterminate(self):
+        with mock.patch.object(self.module.subprocess, "Popen", return_value=FakeProcess(timeout=True)), \
+             mock.patch.object(self.module.os, "killpg"):
+            with self.assertRaises(self.module.InitializeError) as raised:
+                self.module._read_protocol(mock.Mock(), ["koha-shell"], {}, 3)
+        self.assertTrue(raised.exception.details["indeterminate"])
+        with mock.patch.object(self.module.subprocess, "Popen", return_value=FakeProcess(stdout=b"warning only")):
+            with self.assertRaises(self.module.InitializeError) as raised:
+                self.module._read_protocol(mock.Mock(), ["koha-shell"], {}, 3)
+        self.assertTrue(raised.exception.details["indeterminate"])
+        failed = FakeProcess(stdout=b'{"protocol":1,"ok":false,"error":{"type":"koha_operation_failed","message":"boom","details":{"changed":true}}}')
+        failed.returncode = 2
+        with mock.patch.object(self.module.subprocess, "Popen", return_value=failed):
+            with self.assertRaises(self.module.InitializeError) as raised:
+                self.module._read_protocol(mock.Mock(), ["koha-shell"], {}, 3)
+        self.assertNotIn("indeterminate", raised.exception.details)
 
     def test_protocol_validates_json_rc_and_protocol_version(self):
         process = FakeProcess()
