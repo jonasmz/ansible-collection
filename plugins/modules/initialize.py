@@ -30,11 +30,12 @@ options:
     description: Código de idioma disponible en el catálogo de Koha usado para seleccionar los datos iniciales.
     type: str
     required: true
-  marc_flavour:
-    description: Variante MARC instalada por el paquete y reconocida por C4::Installer.
+  marcflavor:
+    description: Variante MARC instalada por el paquete y reconocida por C4::Installer; coincide con jmz.koha.instance.
     type: str
     choices: [MARC21, UNIMARC]
     required: true
+    aliases: [marc_flavour]
   sample_data:
     description: Identificadores opcionales C(section/archivo.sql) del catálogo de Koha; los datos demostrativos no se cargan por defecto.
     type: list
@@ -101,7 +102,7 @@ EXAMPLES = r'''
   jmz.koha.initialize:
     instance: biblioteca
     language: es-ES
-    marc_flavour: MARC21
+    marcflavor: MARC21
     library:
       code: CENTRAL
       name: Biblioteca Central
@@ -145,14 +146,14 @@ EXAMPLES = r'''
     instance: biblioteca
     state: inspect
     language: es-ES
-    marc_flavour: MARC21
+    marcflavor: MARC21
   become: true
 
 - name: Ejecutar en modo de comprobación
   jmz.koha.initialize:
     instance: biblioteca
     language: es-ES
-    marc_flavour: UNIMARC
+    marcflavor: UNIMARC
     # Los datos y entidades requeridos se declaran igual que en el ejemplo completo.
   check_mode: true
   become: true
@@ -221,14 +222,19 @@ import fcntl
 import subprocess
 import contextlib
 import signal
+import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import (
+    choice_normalizer, ensure_mariadb_timezone, ModuleInputError,
+)
 
 
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,10}$")
 LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.(?:sql|yml)$")
+RULE_NAME_ALIASES = {"maxissuesqty": "maxissueqty"}
 PROTOCOL = 1
 STATES = {"uninitialized", "schema_created", "data_incomplete", "onboarding_required", "initialized", "inconsistent", "upgrade_required"}
 
@@ -243,6 +249,8 @@ class InitializeError(Exception):
 
 def _validate_params(module):
     p = module.params
+    if "marcflavor" not in p:
+        p["marcflavor"] = p.get("marc_flavour")
     instance = p["instance"]
     if not INSTANCE_RE.fullmatch(instance):
         raise InitializeError("instance debe ser un identificador Koha válido (1-11 caracteres, minúsculas, números o guiones)")
@@ -250,7 +258,7 @@ def _validate_params(module):
         if p.get("administrator") or p.get("library") or p.get("patron_categories") or p.get("item_types") or p.get("circulation_rules"):
             raise InitializeError("state=inspect no acepta parámetros de onboarding")
         return
-    for required in ("language", "marc_flavour", "library", "patron_categories", "administrator", "item_types", "circulation_rules"):
+    for required in ("language", "marcflavor", "library", "patron_categories", "administrator", "item_types", "circulation_rules"):
         if p.get(required) is None:
             raise InitializeError("%s es obligatorio cuando state=present" % required)
     if not LANGUAGE_RE.fullmatch(p["language"]):
@@ -285,6 +293,20 @@ def _validate_params(module):
             raise InitializeError("circulation_rules referencia un tipo de material no declarado")
         if not rule["rules"]:
             raise InitializeError("cada entrada de circulation_rules.rules debe contener al menos una regla")
+        normalized_rules = {}
+        for name, value in rule["rules"].items():
+            if not isinstance(name, str):
+                raise InitializeError("los nombres de circulation_rules.rules deben ser texto")
+            # Koha's rule identifiers are lowercase; accept the common
+            # camelCase spelling used in role variables, then send Koha's API
+            # canonical names. One historical typo is kept as an alias.
+            canonical = RULE_NAME_ALIASES.get(name.lower(), name.lower())
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", canonical):
+                raise InitializeError("nombre de regla de circulación inválido: %s" % name)
+            if canonical in normalized_rules:
+                raise InitializeError("circulation_rules contiene nombres duplicados para la regla %s" % canonical)
+            normalized_rules[canonical] = value
+        rule["rules"] = normalized_rules
     for identifier in p["sample_data"]:
         if not IDENTIFIER_RE.fullmatch(identifier) or ".." in identifier.split("/"):
             raise InitializeError("sample_data solo acepta identificadores del catálogo Koha en formato section/file.sql")
@@ -328,20 +350,36 @@ def _read_protocol(module, command, request, timeout):
     return payload
 
 
+def _ensure_instance_timezone(module, conf):
+    """Ensure the instance's named timezone is available in its MariaDB."""
+    try:
+        root = ET.parse(conf).getroot()
+    except (ET.ParseError, OSError) as exc:
+        raise InitializeError("No se pudo leer koha-conf.xml para comprobar su zona horaria") from exc
+    timezone = (root.findtext("timezone") or "").strip()
+    if not timezone:
+        return False
+    dbhost = (root.findtext("./database/hostname") or "localhost").strip()
+    try:
+        return ensure_mariadb_timezone(module, timezone, dbhost)
+    except ModuleInputError as exc:
+        raise InitializeError(str(exc)) from exc
+
+
 def main():
     module = AnsibleModule(
         argument_spec=dict(
             instance=dict(type="str", required=True),
-            state=dict(type="str", choices=["present", "inspect"], default="present"),
+            state=dict(type=choice_normalizer(["present", "inspect"]), choices=["present", "inspect"], default="present"),
             language=dict(type="str"),
-            marc_flavour=dict(type="str", choices=["MARC21", "UNIMARC"]),
+            marcflavor=dict(type=choice_normalizer(["MARC21", "UNIMARC"]), choices=["MARC21", "UNIMARC"], aliases=["marc_flavour"]),
             sample_data=dict(type="list", elements="str", default=[]),
             library=dict(type="dict", options=dict(code=dict(type="str", required=True), name=dict(type="str", required=True))),
             patron_categories=dict(type="list", elements="dict", options=dict(
                 code=dict(type="str", required=True), description=dict(type="str", required=True),
-                type=dict(type="str", choices=["A", "C", "I", "S", "X"], required=True),
+                type=dict(type=choice_normalizer(["A", "C", "I", "S", "X"]), choices=["A", "C", "I", "S", "X"], required=True),
                 enrolment_period=dict(type="int", required=True),
-                default_privacy=dict(type="str", choices=["default", "never", "forever", "holds"], required=True),
+                default_privacy=dict(type=choice_normalizer(["default", "never", "forever", "holds"]), choices=["default", "never", "forever", "holds"], required=True),
             )),
             administrator=dict(type="dict", no_log=True, options=dict(
                 username=dict(type="str", required=True), firstname=dict(type="str", required=True),
@@ -362,6 +400,7 @@ def main():
     )
     p = module.params
     instance = p["instance"]
+    timezone_changed = False
     try:
         _validate_params(module)
         conf = "/etc/koha/sites/%s/koha-conf.xml" % instance
@@ -404,6 +443,10 @@ def main():
                     fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise InitializeError("Ya hay otra inicialización activa para la instancia %s" % instance)
+            # Koha connects to the database during state inspection, so repair
+            # MariaDB's timezone tables before invoking its Perl APIs.
+            if p["state"] == "present" and not module.check_mode:
+                timezone_changed = _ensure_instance_timezone(module, conf)
             probe = _read_protocol(module, command, {"protocol": PROTOCOL, "operation": "inspect"}, p["timeout"])
             previous = probe.get("state")
             if previous not in STATES:
@@ -415,7 +458,8 @@ def main():
                                  msg="Estado de Koha inspeccionado sin modificaciones.")
             if previous in ("data_incomplete", "inconsistent", "upgrade_required"):
                 raise InitializeError("La instancia está en estado %s; no se reintenta ni migra automáticamente" % previous)
-            request = {k: p[k] for k in ("language", "marc_flavour", "sample_data", "library", "patron_categories", "administrator", "item_types", "circulation_rules")}
+            request = {k: p[k] for k in ("language", "sample_data", "library", "patron_categories", "administrator", "item_types", "circulation_rules")}
+            request["marc_flavour"] = p["marcflavor"]
             request.update(protocol=PROTOCOL, operation="initialize")
             if module.check_mode:
                 planned = previous != "initialized"
@@ -428,9 +472,12 @@ def main():
             current = result.get("current_state")
             if current != "initialized":
                 raise InitializeError("La inicialización terminó sin alcanzar el estado initialized (observado: %s)" % current)
-            module.exit_json(changed=bool(result.get("changed")), instance=instance,
+            actions = result.get("actions", [])
+            if timezone_changed:
+                actions = ["cargar tablas de zonas horarias MariaDB"] + actions
+            module.exit_json(changed=bool(result.get("changed")) or timezone_changed, instance=instance,
                              previous_state=result.get("previous_state", previous), current_state=current,
-                             actions=result.get("actions", []), validation=result.get("validation", {}),
+                             actions=actions, validation=result.get("validation", {}),
                              state_info=result.get("state_info"), warnings=result.get("warnings", []),
                              diff={"before": previous, "after": current} if module._diff else None,
                              msg="La inicialización de Koha y el onboarding finalizaron correctamente.")
@@ -440,7 +487,7 @@ def main():
                          current_state=details.get("current_state", locals().get("current")),
                          previous_state=details.get("previous_state", locals().get("previous")),
                          state_info=details.get("state_info"),
-                         changed=details.get("changed", False), partial=details.get("partial", False),
+                         changed=details.get("changed", timezone_changed), partial=details.get("partial", timezone_changed),
                          actions=details.get("actions", locals().get("actions", [])),
                          warnings=details.get("warnings", []), phase=details.get("phase"))
 

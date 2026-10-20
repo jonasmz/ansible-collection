@@ -26,14 +26,16 @@ class ActionModule(ActionBase):
             # koha-shell. Ansible's normal remote_tmp parent is often mode
             # 0700, so create this unique directory directly below shared /tmp.
             staged_path = "/tmp/ansible-koha-initialize-%s" % uuid.uuid4().hex
-            staging_owner = task_vars.get("ansible_user") or self._play_context.remote_user
-            if not staging_owner:
-                raise AnsibleActionFail("Cannot determine the SSH user that must own the temporary staging directory")
-            directory_result = self._execute_module(
-                module_name="ansible.builtin.file",
-                module_args={"path": staged_path, "mode": "0711", "owner": staging_owner, "state": "directory"},
-                task_vars=task_vars,
-            )
+            become = self._play_context.become
+            self._play_context.become = False
+            try:
+                directory_result = self._execute_module(
+                    module_name="ansible.builtin.file",
+                    module_args={"path": staged_path, "mode": "0711", "state": "directory"},
+                    task_vars=task_vars,
+                )
+            finally:
+                self._play_context.become = become
             if directory_result.get("failed"):
                 return directory_result
             staged = staged_path

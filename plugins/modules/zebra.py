@@ -142,6 +142,7 @@ import os
 import re
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
 
 
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
@@ -311,7 +312,7 @@ def main():
     module = AnsibleModule(
         argument_spec=dict(
             instance=dict(type="str", required=True),
-            state=dict(type="str", choices=["started", "stopped", "restarted", "status"]),
+            state=dict(type=choice_normalizer(["started", "stopped", "restarted", "status"]), choices=["started", "stopped", "restarted", "status"]),
             enabled=dict(type="bool"),
             verbose=dict(type="bool", default=False),
             command_path=dict(type="path", default="/usr/sbin/koha-zebra"),

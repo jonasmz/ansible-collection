@@ -19,14 +19,16 @@ class ActionModule(ActionBase):
             if not os.path.isfile(source):
                 raise AnsibleActionFail("The collection helper files/smtp_probe.pl is missing")
             staged = "/tmp/ansible-koha-smtp-%s" % uuid.uuid4().hex
-            owner = task_vars.get("ansible_user") or self._play_context.remote_user
-            if not owner:
-                raise AnsibleActionFail("Cannot determine the SSH user for temporary helper staging")
-            directory_result = self._execute_module(
-                module_name="ansible.builtin.file",
-                module_args={"path": staged, "mode": "0711", "owner": owner, "state": "directory"},
-                task_vars=task_vars,
-            )
+            become = self._play_context.become
+            self._play_context.become = False
+            try:
+                directory_result = self._execute_module(
+                    module_name="ansible.builtin.file",
+                    module_args={"path": staged, "mode": "0711", "state": "directory"},
+                    task_vars=task_vars,
+                )
+            finally:
+                self._play_context.become = become
             if directory_result.get("failed"):
                 return directory_result
             remote_file = staged + "/smtp_probe.pl"

@@ -151,6 +151,7 @@ import time
 import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
 
 
 LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
@@ -233,7 +234,18 @@ def _query_languages(module, binary, mode, dev_instance):
         argv = [binary, "--list", "--available"] + _scope_args(dev_instance)
     else:
         raise TranslateError("unsupported language query: %s" % mode)
-    result = _command(module, argv, "language list query")
+    try:
+        result = _command(module, argv, "language list query")
+    except TranslateError as exc:
+        # Koha 26.05.x uses `set -e` and ends `--list` with grep -v. When
+        # there are no non-English translations installed, grep finds no
+        # lines and the script exits 1 without diagnostics. Treat that exact
+        # result as an empty installed-language list; other failures remain
+        # errors. The available-language query has different semantics.
+        result = exc.result
+        if not (mode == "installed" and result and result.get("rc") == 1
+                and not result.get("stdout") and not result.get("stderr")):
+            raise
     languages = []
     seen = set()
     for raw in result["stdout"].splitlines():
@@ -344,7 +356,7 @@ def main():
     module = AnsibleModule(
         argument_spec=dict(
             name=dict(type="str", required=True, aliases=["language", "lang_code"]),
-            state=dict(type="str", choices=["present", "absent"], default="present"),
+            state=dict(type=choice_normalizer(["present", "absent"]), choices=["present", "absent"], default="present"),
             update=dict(type="bool", default=False),
             dev_instance=dict(type="str"),
             verbose=dict(type="bool", default=False),

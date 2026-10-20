@@ -19,7 +19,7 @@ de la instancia. Ajusta el flavor MARC y el idioma de Zebra según el catálogo.
 ```yaml
 - name: Crear Koha biblioteca
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     state: present
     db_mode: create
     marcflavor: marc21
@@ -40,7 +40,7 @@ Apache en el puerto 80. Este módulo no configura HAProxy, SMTP ni Memcached.
 ```yaml
 - name: Crear Koha detrás de HAProxy
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     marcflavor: marc21
     zebralang: es
@@ -92,7 +92,7 @@ temporal privado para Koha.
 ```yaml
 - name: Crear instancia usando DB existente
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: use
     dbhost: db.example.org
     database: koha_biblioteca
@@ -113,7 +113,7 @@ con seguridad.
 ```yaml
 - name: Crear instancia con archivo nativo de credenciales
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: use
     database: koha_biblioteca
     passwdfile: /root/koha-secrets/biblioteca.passwd
@@ -133,7 +133,7 @@ devuelve solo la ruta, nunca el contenido.
 ```yaml
 - name: Preparar solicitud de base de datos externa
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: request
     db_request_path: /root/koha-db-requests/biblioteca-db-request.txt
   become: true
@@ -146,7 +146,7 @@ credenciales estén disponibles en el host Koha, completa la instalación:
 ```yaml
 - name: Completar la instancia solicitada
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: populate
     database: koha_biblioteca
     db_credentials:
@@ -169,7 +169,7 @@ de Koha.
 ```yaml
 - name: Crear Koha desde SQL inicial propio
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     defaultsql: /srv/koha/sql/initial.sql.gz
     adminuser: 1
@@ -185,7 +185,7 @@ ejemplo muestra parámetros opcionales; verifica que el servicio relacionado
 ```yaml
 - name: Crear Koha con opciones adicionales
   jmz.koha.instance:
-    name: archivo
+    instance: archivo
     db_mode: create
     marcflavor: unimarc
     zebralang: fr
@@ -218,7 +218,7 @@ de esta tarea.
 ```yaml
 - name: Crear con la configuración común del servidor
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     configfile: /etc/koha/site-profiles/common.conf
     vhosts:
@@ -243,7 +243,7 @@ la creación vaya a completarse.
 ```yaml
 - name: Revisar el plan de creación sin aplicarlo
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     marcflavor: marc21
   become: true
@@ -260,7 +260,7 @@ Apache.
 ```yaml
 - name: Crear Koha con certificado Let's Encrypt local
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     vhosts:
       domain: .example.org
@@ -282,9 +282,9 @@ recuperar la conexión a DB, proporciona credenciales válidas.
 ```yaml
 - name: Reparar la configuración de biblioteca y preservar su DB
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     repair: true
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
     db_credentials:
       username: koha_biblioteca
@@ -302,14 +302,14 @@ recrea la DB.
 Para aplicar parámetros distintos a una instancia administrada y completa,
 solicita `reconfigure` y las dos confirmaciones. El flujo retira y vuelve a
 crear la configuración apuntando a la DB existente; conserva
-`/var/lib/koha/<name>` y no aplica `defaultsql`.
+`/var/lib/koha/<instance>` y no aplica `defaultsql`.
 
 ```yaml
 - name: Cambiar los vhosts de biblioteca preservando DB y archivos
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     reconfigure: true
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
     vhosts:
       domain: .example.org
@@ -334,30 +334,30 @@ configuración de Koha pero conserva la base de datos y los datos de uploads.
 ```yaml
 - name: Retirar biblioteca y conservar DB/datos
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     state: absent
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
   become: true
 ```
 
 Para pedir que `koha-remove` elimine la base de datos convencional
-`koha_<name>`, establece `remove_database: true`. Para eliminar también los
-datos bajo `/var/lib/koha/<name>` y spool, establece `purge_data: true`:
+`koha_<instance>`, establece `remove_database: true`. Para eliminar también los
+datos bajo `/var/lib/koha/<instance>` y spool, establece `purge_data: true`:
 
 ```yaml
 - name: Retirar biblioteca y purgar DB convencional y datos locales
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     state: absent
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
     remove_database: true
     purge_data: true
   become: true
 ```
 
-`koha-remove` solo conoce la DB convencional `koha_<name>`; verifica aparte
+`koha-remove` solo conoce la DB convencional `koha_<instance>`; verifica aparte
 cualquier DB con nombre personalizado. Ejecuta primero en check mode para
 revisar el plan. Si se conservan archivos locales, el módulo los informa como
 residuales.
@@ -371,16 +371,16 @@ explícitamente:
 ```yaml
 - name: Crear una instancia usando un paquete Koha con rutas personalizadas
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     db_mode: create
     koha_create_path: /opt/koha/bin/koha-create
   become: true
 
 - name: Eliminar con koha-remove en una ruta personalizada
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     state: absent
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
     koha_remove_path: /opt/koha/bin/koha-remove
   become: true

@@ -10,6 +10,11 @@ completa el onboarding desde la interfaz web.
 Admite `state: present` y los modos nativos `create`, `request`, `populate` y
 `use`. No configura HAProxy ni servicios externos.
 
+El parámetro canónico para identificar la instancia es `instance`, igual que
+en el resto de módulos; `name` y `confirm_name` siguen aceptados como alias de
+entrada para compatibilidad. Los resultados devuelven `instance` y conservan
+`name` como campo de salida legado.
+
 Los ejemplos de creación, bases de datos, vhosts, secretos, reparación,
 reconfiguración y borrado están en la [guía de ejemplos](examples.md).
 
@@ -30,11 +35,18 @@ y un marcador propio. Clasifica los estados `absent`, `requested`, `present` y
 administrada y bloquea ejecución normal; `repair: true` permite reconstruirla
 explícitamente con DB preservada y doble confirmación.
 
-En éxito guarda `/var/lib/koha/<name>/.ansible-koha-instance-state` con estado
+En éxito guarda `/var/lib/koha/<instance>/.ansible-koha-instance-state` con estado
 y huella de opciones no secretas. Una repetición idéntica no ejecuta
 `koha-create`; un cambio detectable falla como drift. Cambios externos en
 Apache/DB no se verifican y `present` no significa onboarding web completado.
 `--check` solo informa el plan; no prueba dependencias ni servicios.
+
+Cuando `timezone` contiene una zona IANA y la DB es local (`dbhost` omitido o
+loopback), el módulo comprueba `CONVERT_TZ` y, si faltan tablas, las carga desde
+`/usr/share/zoneinfo` con el cliente administrativo local de MariaDB y reinicia
+MariaDB para activarlas. Se requiere `become: true` y `tzdata`. La provisión
+automática no modifica servidores MariaDB remotos; en esos casos falla con un
+diagnóstico explícito en lugar de dejar que Koha falle más tarde al conectar.
 
 ### Integración ejecutada
 
@@ -58,7 +70,7 @@ crear y se deshabilitaron y recargaron al terminar. `mpm_itk` ya estaba activo.
 | `use` | `--use-db` | Usa una DB ya creada y poblada. |
 
 `request` escribe `db_request_path` o por defecto
-`/var/lib/koha/<name>/<name>-db-request.txt`, modo 0600. Devuelve solo la ruta.
+`/var/lib/koha/<instance>/<instance>-db-request.txt`, modo 0600. Devuelve solo la ruta.
 `db_credentials` se convierte a un `passwdfile` privado temporal nativo
 (`instancia:usuario:contraseña:basedatos:host`) y no se combina con
 `passwdfile`. Las filas de `passwdfile` se validan para el nombre solicitado.
@@ -93,7 +105,7 @@ con datos de origen no confiable.
 | `enable_sru`, `sru_port` | Flags SRU; desactivado por omisión, puerto default 7090. |
 | `database`, `dbhost`, `passwdfile` | `--database` (máx. 64), `--dbhost`, `--passwdfile`. |
 | `defaultsql`, `adminuser` | `--defaultsql`, `--adminuser`; adminuser es ID borrower en importación SQL, no crea cuenta. |
-| `template_cache_dir`, `timezone`, `upload_path`, `tmp_path` | Flags homónimos; omitidos para heredar defaults. |
+| `template_cache_dir`, `timezone`, `upload_path`, `tmp_path` | Flags homónimos; omitidos para heredar defaults. Una zona IANA también asegura las tablas de zonas horarias de MariaDB local. |
 | `message_broker.*` | Opciones `--mb-*`; omitidas si no se definen. No gestiona el servicio externo. |
 | `keep_cookies` | Repetición de `--keep-cookie`, serializada como array `KEEP_COOKIE`. |
 | `vhosts.*` | Variables `DOMAIN`, `OPACPORT`, `OPACPREFIX`, `OPACSUFFIX`, `INTRAPORT`, `INTRAPREFIX`, `INTRASUFFIX`. Si se omite, hereda `koha-sites.conf`. |
@@ -117,11 +129,11 @@ reinicia Apache; DNS público debe apuntar al host y el puerto 80 debe llegar a
 ### Borrado, reparación y reconfiguración explícitos
 
 `state: absent` usa `koha-remove`. La operación exige dos confirmaciones:
-`confirm_name: biblioteca` y `confirm_data_loss: true`. Por defecto pasa
+`confirm_instance: biblioteca` y `confirm_data_loss: true` (`confirm_name` sigue disponible como alias). Por defecto pasa
 `--keep-mysql` para preservar la DB. `remove_database: true` permite que Koha
-borre su DB convencional `koha_<name>`; una DB con nombre personalizado puede
+borre su DB convencional `koha_<instance>`; una DB con nombre personalizado puede
 quedar intacta. `purge_data: true` agrega `--purge-all` y elimina datos de
-`/var/lib/koha/<name>` y spool. Sin `purge_data`, esos archivos se conservan y
+`/var/lib/koha/<instance>` y spool. Sin `purge_data`, esos archivos se conservan y
 se reportan como residuales.
 
 Si una instancia queda `partial`, `repair: true` reconstruye Apache y los
@@ -137,9 +149,9 @@ segundo comando falla. Requieren que el directorio del sitio exista y que
 ```yaml
 - name: Reconfigurar biblioteca manteniendo su base de datos
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     reconfigure: true
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
     vhosts:
       domain: .example.org
@@ -148,9 +160,9 @@ segundo comando falla. Requieren que el directorio del sitio exista y que
 
 - name: Retirar la instancia y conservar DB/datos de uploads
   jmz.koha.instance:
-    name: biblioteca
+    instance: biblioteca
     state: absent
-    confirm_name: biblioteca
+    confirm_instance: biblioteca
     confirm_data_loss: true
   become: true
 ```
@@ -164,7 +176,7 @@ fue consultada el 2026-10-18 y confirma límite `$# <= 16`, modos, precedencia,
 variables, archivo request y prerequisites del flujo Let's Encrypt. El código
 de [`koha-remove`](https://github.com/Koha-Community/Koha/blob/main/debian/scripts/koha-remove)
 confirma `--keep-mysql` y `--purge-all`, incluyendo que el último elimina
-`/var/lib/koha/<name>` y spool. No sustituye verificar el paquete objetivo. En el
+`/var/lib/koha/<instance>` y spool. No sustituye verificar el paquete objetivo. En el
 host Ubuntu 24.04 debe registrarse la versión exacta del paquete, revisar
 `koha-create --help` y `/usr/share/koha/bin/koha-functions.sh`. El módulo
 verifica en runtime que el binario anuncie modo y `--configfile`; las otras

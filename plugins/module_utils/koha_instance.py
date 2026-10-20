@@ -26,7 +26,23 @@ def normalize_marcflavor(value):
         return None
     if not isinstance(value, str):
         raise TypeError("marcflavor debe ser texto")
-    return value.lower()
+    return choice_normalizer(["marc21", "unimarc"])(value)
+
+
+def choice_normalizer(choices):
+    """Return a type converter that maps enum input to its canonical choice.
+
+    Enum values are matched without regard to case or surrounding whitespace,
+    then returned using the spelling declared in ``choices``.
+    """
+    canonical = {str(choice).strip().casefold(): choice for choice in choices}
+
+    def normalize(value):
+        if not isinstance(value, str):
+            return value
+        return canonical.get(value.strip().casefold(), value)
+
+    return normalize
 
 
 def db_password_is_safe(value):
@@ -35,11 +51,69 @@ def db_password_is_safe(value):
             and not any(char in value for char in DB_PASSWORD_UNSAFE))
 
 
+def ensure_mariadb_timezone(module, timezone, dbhost):
+    """Load local MariaDB timezone tables when a named Koha timezone is missing."""
+    if not timezone or timezone == "SYSTEM" or re.fullmatch(r"[+-]\d{2}:\d{2}", timezone):
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*", timezone):
+        raise ModuleInputError("timezone debe ser SYSTEM, un offset ±HH:MM o un identificador IANA válido")
+    host = (dbhost or "localhost").strip().lower()
+    if host not in ("localhost", "127.0.0.1", "::1", "[::1]"):
+        raise ModuleInputError("timezone %s requiere tablas MariaDB en la base remota %s; la carga automática requiere una DB local accesible por socket" % (timezone, dbhost))
+
+    zoneinfo_root = os.path.realpath("/usr/share/zoneinfo")
+    zone_file = os.path.realpath(os.path.join(zoneinfo_root, timezone))
+    if not zone_file.startswith(zoneinfo_root + os.sep) or not os.path.isfile(zone_file):
+        raise ModuleInputError("timezone %s no existe en %s" % (timezone, zoneinfo_root))
+
+    client = module.get_bin_path("mariadb", required=False) or module.get_bin_path("mysql", required=False)
+    if not client:
+        raise ModuleInputError("no se encontró mariadb/mysql para comprobar las tablas de zonas horarias")
+
+    query = "SELECT CONVERT_TZ('2025-01-15 12:00:00','+00:00','%s') IS NOT NULL" % timezone
+    query_argv = [client, "--protocol=socket", "--batch", "--skip-column-names", "--execute", query, "mysql"]
+    rc, stdout, _stderr = module.run_command(query_argv, check_rc=False)
+    if rc != 0:
+        raise ModuleInputError("no se pudo consultar MariaDB local como root para verificar las tablas de zonas horarias")
+    if stdout.strip() == "1":
+        return False
+    if stdout.strip() != "0":
+        raise ModuleInputError("MariaDB devolvió una respuesta inesperada al comprobar la zona horaria")
+
+    tzinfo = module.get_bin_path("mariadb-tzinfo-to-sql", required=False) or module.get_bin_path("mysql_tzinfo_to_sql", required=False)
+    if not tzinfo:
+        raise ModuleInputError("no se encontró mariadb-tzinfo-to-sql/mysql_tzinfo_to_sql para cargar zonas horarias")
+    rc, sql, _stderr = module.run_command([tzinfo, zoneinfo_root], check_rc=False)
+    if rc != 0 or not sql:
+        raise ModuleInputError("no se pudo generar la carga de zonas horarias desde %s" % zoneinfo_root)
+    rc, _stdout, _stderr = module.run_command([client, "--protocol=socket", "mysql"], data=sql, check_rc=False)
+    if rc != 0:
+        raise ModuleInputError("MariaDB rechazó la carga automática de sus tablas de zonas horarias")
+
+    systemctl = module.get_bin_path("systemctl", required=False)
+    service = module.get_bin_path("service", required=False)
+    if systemctl:
+        rc, _stdout, _stderr = module.run_command([systemctl, "restart", "mariadb"], check_rc=False)
+    elif service:
+        rc, _stdout, _stderr = module.run_command([service, "mariadb", "restart"], check_rc=False)
+    else:
+        raise ModuleInputError("se cargaron zonas horarias pero no se encontró systemctl/service para reiniciar MariaDB y activarlas")
+    if rc != 0:
+        raise ModuleInputError("se cargaron las zonas horarias, pero no se pudo reiniciar MariaDB para activarlas")
+
+    rc, stdout, _stderr = module.run_command(query_argv, check_rc=False)
+    if rc != 0 or stdout.strip() != "1":
+        raise ModuleInputError("las tablas de zonas horarias se cargaron, pero MariaDB no reconoce %s tras reiniciarse" % timezone)
+    return True
+
+
 def validate_params(p):
+    instance = p.get("instance", p.get("name"))
+    confirmed_instance = p.get("confirm_instance", p.get("confirm_name"))
     if p.get("marcflavor") is not None:
         p["marcflavor"] = normalize_marcflavor(p["marcflavor"])
-    if not NAME_RE.fullmatch(p["name"]):
-        raise ModuleInputError("name debe tener 1-11 caracteres: minúsculas, números o guion; debe comenzar por letra")
+    if not NAME_RE.fullmatch(instance or ""):
+        raise ModuleInputError("instance debe tener 1-11 caracteres: minúsculas, números o guion; debe comenzar por letra")
     if p["state"] not in ("present", "absent"):
         raise ModuleInputError("state debe ser present o absent")
     mode = p["db_mode"]
@@ -71,8 +145,8 @@ def validate_params(p):
         raise ModuleInputError("repair/reconfigure no admiten db_mode=request ni populate; la DB existente se reutiliza con --use-db")
     if (p.get("repair") or p.get("reconfigure")) and p.get("defaultsql"):
         raise ModuleInputError("repair/reconfigure no admiten defaultsql; --use-db conserva la DB existente y no importa SQL")
-    if (p.get("repair") or p.get("reconfigure")) and (p.get("confirm_name") != p.get("name") or not p.get("confirm_data_loss")):
-        raise ModuleInputError("repair/reconfigure requieren confirm_name igual a name y confirm_data_loss=true")
+    if (p.get("repair") or p.get("reconfigure")) and (confirmed_instance != instance or not p.get("confirm_data_loss")):
+        raise ModuleInputError("repair/reconfigure requieren confirm_instance igual a instance y confirm_data_loss=true")
     vhosts = p.get("vhosts") or {}
     if vhosts:
         if not re.fullmatch(r"\.?[A-Za-z0-9.-]+", vhosts.get("domain", "")):
@@ -136,7 +210,7 @@ def config_values(p, request_passwdfile=None):
                        ("opac_prefix", "OPACPREFIX"), ("opac_suffix", "OPACSUFFIX"),
                        ("staff_port", "INTRAPORT"), ("staff_prefix", "INTRAPREFIX"),
                        ("staff_suffix", "INTRASUFFIX")):
-        if field in v:
+        if field in v and v[field] is not None:
             values[key] = v[field]
     if v:
         # koha-create may render an invalid *:None vhost if either port is

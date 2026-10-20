@@ -36,8 +36,11 @@ todas las revisiones empaquetadas; el código instalado sigue siendo la autorida
 
 Hallazgos que afectan el diseño:
 
-1. `--list` puede devolver una lista vacía con código cero: `en` se excluye de
-   la salida. Una salida vacía no significa por sí misma error.
+1. `--list` excluye `en` de la salida. En Koha 26.05.x, si no hay otras
+   traducciones instaladas, el `grep` final no encuentra coincidencias y, por
+   `set -e`, el comando termina con código 1 y salida vacía. El módulo trata
+   únicamente ese resultado sin diagnósticos como una lista instalada vacía;
+   otros códigos no cero siguen siendo errores.
 2. La lista instalada se deriva de directorios OPAC `bootstrap` y `prog`; la
    disponible se deriva de nombres `*-opac-bootstrap.po`. Koha usa códigos
    regionales exactos como `es-ES`, `fr-CA` y `en-GB`; hay que comparar líneas

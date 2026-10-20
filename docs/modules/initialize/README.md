@@ -15,6 +15,12 @@ workers, índices, cron o servicios externos.
 - Ejecutar con `become: true`. `koha-shell` debe poder cambiar al usuario
   `<instancia>-koha`; las credenciales DB se toman de esa misma instancia a
   través de `KOHA_CONF`.
+- Antes de consultar Koha en `state: present`, el módulo lee la zona horaria y
+  el host DB declarados en `koha-conf.xml`. Si la zona IANA falta en las tablas
+  de una MariaDB local, las carga desde `tzdata` y reinicia MariaDB. Esto
+  requiere `become: true`; las bases remotas fallan con un diagnóstico claro,
+  porque el módulo no administra servidores DB externos. `state: inspect` y
+  `--check` no hacen cambios.
 - El host debe tener `/etc/koha/sites/<instancia>/koha-conf.xml`, los archivos
   originales de instalación y las APIs Perl requeridas.
 - El módulo inspecciona capacidades en ejecución y falla ante estados
@@ -72,7 +78,7 @@ y posterior, nunca la contraseña.
 | `instance` | string | sí | Identificador Koha (1–11 caracteres; minúsculas, números y guiones). |
 | `state` | string | no | `present` (predeterminado) o `inspect`. |
 | `language` | string | para `present` | Código que exista en el catálogo de idiomas instalado. |
-| `marc_flavour` | string | para `present` | `MARC21` o `UNIMARC`, sujeto a frameworks disponibles. |
+| `marcflavor` | string | para `present` | `MARC21` o `UNIMARC`, sin distinguir mayúsculas/minúsculas ni espacios externos; sujeto a frameworks disponibles. `marc_flavour` sigue disponible como alias. |
 | `sample_data` | lista | no | IDs opcionales `sección/archivo.sql` del catálogo de Koha; predeterminado vacío. |
 | `library` | mapa | para `present` | `code`, `name`. No se reconcilia una biblioteca existente. |
 | `patron_categories` | lista | para `present` | Categorías con `code`, `description`, `type`, `enrolment_period`, `default_privacy`. |
@@ -92,6 +98,14 @@ ese dato; si la cuenta ya tiene una dirección distinta, falla para evitar
 reemplazarla silenciosamente. Omitir `email` conserva el valor actual.
 `administrator.email` es el correo del patron y no configura la preferencia
 global `KohaAdminEmailAddress`.
+
+Los nombres de `circulation_rules.rules` se normalizan a minúsculas antes de
+invocar Koha, por lo que también se aceptan variantes camelCase como
+`issueLength`. El alias `maxissuesqty` se normaliza a `maxissueqty`. Antes de
+crear el esquema o cargar datos, el helper compara las reglas con el catálogo
+de la versión Koha instalada y rechaza nombres desconocidos sin modificar la
+base. Si una ejecución anterior ya llegó a `onboarding_required`, una nueva
+ejecución retoma el onboarding y no repite el esquema ni los datos iniciales.
 
 Los identificadores de `sample_data` se validan contra el catálogo de Koha y sus
 rutas canónicas deben permanecer dentro de `installer/data`; no se aceptan rutas

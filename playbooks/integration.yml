@@ -38,7 +38,7 @@
 
     - name: Create the isolated integration instance
       jmz.koha.instance:
-        name: "{{ koha_instance }}"
+        instance: "{{ koha_instance }}"
         state: present
         db_mode: create
         marcflavor: marc21
@@ -54,7 +54,7 @@
         instance: "{{ koha_instance }}"
         state: present
         language: en
-        marc_flavour: MARC21
+        marcflavor: MARC21
         library:
           code: "{{ koha_library_code }}"
           name: Biblioteca de integración
@@ -96,7 +96,7 @@
         instance: "{{ koha_instance }}"
         state: present
         language: en
-        marc_flavour: MARC21
+        marcflavor: MARC21
         library:
           code: "{{ koha_library_code }}"
           name: Biblioteca de integración
@@ -196,7 +196,7 @@
 
     - name: Enable and start both background worker queues
       jmz.koha.worker:
-        name: "{{ koha_instance }}"
+        instance: "{{ koha_instance }}"
         state: started
         queue: all
       register: workers_started
@@ -220,7 +220,7 @@
 
     - name: Recheck instance idempotency
       jmz.koha.instance:
-        name: "{{ koha_instance }}"
+        instance: "{{ koha_instance }}"
         state: present
         db_mode: create
         marcflavor: marc21
@@ -246,7 +246,7 @@
 
     - name: Recheck worker state
       jmz.koha.worker:
-        name: "{{ koha_instance }}"
+        instance: "{{ koha_instance }}"
         state: started
         queue: all
       register: workers_rechecked

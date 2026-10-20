@@ -93,6 +93,7 @@ import stat
 import subprocess
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
 
 
 PROTOCOL = 1
@@ -204,9 +205,9 @@ def main():
         staff_languages=dict(type="list", elements="str"),
         opac_languages=dict(type="list", elements="str"),
         opac_language_selector=dict(type="bool"),
-        opac_selector_position=dict(type="str", choices=["top", "footer", "both"]),
-        staff_selector_position=dict(type="str", choices=["top", "footer", "both"]),
-        state=dict(type="str", choices=["present"], default="present"),
+        opac_selector_position=dict(type=choice_normalizer(["top", "footer", "both"]), choices=["top", "footer", "both"]),
+        staff_selector_position=dict(type=choice_normalizer(["top", "footer", "both"]), choices=["top", "footer", "both"]),
+        state=dict(type=choice_normalizer(["present"]), choices=["present"], default="present"),
         timeout=dict(type="int", default=120),
         _localization_helper=dict(type="path", required=True, no_log=True),
     ), supports_check_mode=True)

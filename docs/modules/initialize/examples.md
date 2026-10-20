@@ -16,7 +16,7 @@ usar `no_log: true`.
     instance: biblioteca
     state: present
     language: es-ES
-    marc_flavour: MARC21
+    marcflavor: MARC21
     library:
       code: CENTRAL
       name: Biblioteca Central
@@ -66,7 +66,7 @@ de regla válidos y sus ámbitos para la versión instalada de Koha.
   jmz.koha.initialize:
     instance: biblioteca
     language: es-ES
-    marc_flavour: UNIMARC
+    marcflavor: UNIMARC
     sample_data:
       - "optional/sample_biblios.sql"
     # library, patron_categories, administrator, item_types y circulation_rules
@@ -101,7 +101,7 @@ del parámetro `sample_data`.
   jmz.koha.initialize:
     instance: biblioteca
     language: es-ES
-    marc_flavour: MARC21
+    marcflavor: MARC21
     library:
       code: CENTRAL
       name: Biblioteca Central

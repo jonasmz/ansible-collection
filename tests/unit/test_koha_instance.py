@@ -67,6 +67,17 @@ class KohaInstanceHelpersTest(unittest.TestCase):
         with self.assertRaises(ki.ModuleInputError):
             ki.shell_assignment("DOMAIN", "example\n$(id)")
 
+    def test_vhost_defaults_ignore_none_values_from_ansible_dict(self):
+        rendered = ki.render_config(params(vhosts={
+            "domain": ".example.org", "opac_port": None, "opac_prefix": None,
+            "opac_suffix": None, "staff_port": None, "staff_prefix": None,
+            "staff_suffix": "-staff",
+        }))
+        self.assertIn("OPACPORT=80\n", rendered)
+        self.assertIn("INTRAPORT=80\n", rendered)
+        self.assertIn("INTRASUFFIX=-staff\n", rendered)
+        self.assertNotIn("None", rendered)
+
     def test_repeated_cookies_and_cli_limit(self):
         rendered = ki.render_config(params(keep_cookies=["a", "b-cookie"]))
         self.assertIn("KEEP_COOKIE=(a b-cookie)", rendered)

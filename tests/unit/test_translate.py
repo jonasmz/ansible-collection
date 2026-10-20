@@ -169,6 +169,12 @@ class TranslateTest(unittest.TestCase):
         codes, _ = self.module._query_languages(EmptyRunner(), "/usr/sbin/koha-translate", "installed", None)
         self.assertEqual(codes, [])
         self.assertNotIn("es-ES", codes)
+        class KohaEmptyListRunner:
+            def run_command(self, argv):
+                return 1, "", ""
+        codes, result = self.module._query_languages(KohaEmptyListRunner(), "/usr/sbin/koha-translate", "installed", None)
+        self.assertEqual(codes, [])
+        self.assertEqual(result["rc"], 1)
         class BadRunner:
             def run_command(self, argv):
                 return 0, "Installed languages:\n", ""
