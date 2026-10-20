@@ -45,7 +45,10 @@ convierten en booleanos. No se intenta forzar esos estados a `true` o `false`.
 El backend SysV se consulta mediante `koha-zebra --status`, que usa el
 mecanismo de procesos de Koha. SysV no proporciona habilitación Zebra
 persistente compatible con este módulo; solicitar `enabled` falla de forma
-explícita y las consultas devuelven `enabled: null`.
+explícita y las consultas devuelven `enabled: null`. Para iniciar o detener
+Zebra en SysV, use solo `state`. Al arrancar el host, `koha-common` gestiona los
+daemons de las instancias Koha habilitadas; no se configura una habilitación
+persistente separada para Zebra.
 
 Las modificaciones requieren privilegios de root. Use `become: true`. En
 check mode se hacen consultas de solo lectura, se informa `changed` según el

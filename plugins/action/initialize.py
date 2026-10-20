@@ -14,6 +14,7 @@ class ActionModule(ActionBase):
     def run(self, tmp=None, task_vars=None):
         result = super().run(tmp, task_vars)
         staged = None
+        upload_tmp = None
         try:
             # ``_find_needle`` searches playbook/role paths. The helper is
             # shipped with the collection itself, so resolve it relative to
@@ -22,25 +23,29 @@ class ActionModule(ActionBase):
             source = os.path.join(collection_root, "files", "initialize.pl")
             if not os.path.isfile(source):
                 raise AnsibleActionFail("The collection helper files/initialize.pl is missing: %s" % source)
-            # The instance user must traverse the staging directory to run
-            # koha-shell. Ansible's normal remote_tmp parent is often mode
-            # 0700, so create this unique directory directly below shared /tmp.
+            # Upload as the connection user first; the shared staging directory
+            # is created with become and populated by a privileged copy below.
+            upload_tmp = self._make_tmp_path()
+            upload_file = upload_tmp + "/initialize.pl"
+            self._transfer_file(source, upload_file)
+
             staged_path = "/tmp/ansible-koha-initialize-%s" % uuid.uuid4().hex
-            become = self._play_context.become
-            self._play_context.become = False
-            try:
-                directory_result = self._execute_module(
-                    module_name="ansible.builtin.file",
-                    module_args={"path": staged_path, "mode": "0711", "state": "directory"},
-                    task_vars=task_vars,
-                )
-            finally:
-                self._play_context.become = become
+            staged = staged_path
+            directory_result = self._execute_module(
+                module_name="ansible.builtin.file",
+                module_args={"path": staged_path, "mode": "0711", "state": "directory"},
+                task_vars=task_vars,
+            )
             if directory_result.get("failed"):
                 return directory_result
-            staged = staged_path
             remote_file = staged + "/initialize.pl"
-            self._transfer_file(source, remote_file)
+            copy_result = self._execute_module(
+                module_name="ansible.builtin.command",
+                module_args={"argv": ["/usr/bin/cp", "--", upload_file, remote_file]},
+                task_vars=task_vars,
+            )
+            if copy_result.get("failed"):
+                return copy_result
 
             # The helper contains no credentials. koha-shell changes to the
             # instance account, so make only this temporary directory readable
@@ -66,4 +71,16 @@ class ActionModule(ActionBase):
             raise AnsibleActionFail("Unable to stage or run the Koha initialize helper: %s" % exc)
         finally:
             if staged:
-                self._remove_tmp_path(staged, force=True)
+                try:
+                    self._execute_module(
+                        module_name="ansible.builtin.file",
+                        module_args={"path": staged, "state": "absent"},
+                        task_vars=task_vars,
+                    )
+                except Exception:
+                    pass
+            if upload_tmp:
+                try:
+                    self._remove_tmp_path(upload_tmp, force=True)
+                except Exception:
+                    pass

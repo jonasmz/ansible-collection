@@ -339,7 +339,11 @@ def main():
         systemctl = module.get_bin_path("systemctl", required=False)
         backend = _detect_backend(module, instance, systemctl, diagnostics)
         if desired_enabled is not None and backend != "systemd":
-            raise ZebraError("Persistent Zebra enablement is unsupported by the SysV backend for %s" % instance)
+            raise ZebraError(
+                "Persistent Zebra enablement is unsupported by the SysV backend for %s; "
+                "omit enabled and request state=started or state=stopped. SysV startup is "
+                "managed by koha-common for enabled Koha instances" % instance
+            )
         if (desired_state in ("started", "stopped", "restarted") or desired_enabled is not None) and os.geteuid() != 0:
             raise ZebraError("root privileges are required to change Zebra; run this task with become: true")
 

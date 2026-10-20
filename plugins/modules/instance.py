@@ -471,7 +471,7 @@ def main():
         rebuild = False
         if p["state"] == "absent":
             if detected == "absent":
-            module.exit_json(changed=False, instance=name, name=name, state="absent", actions=[], notices=["No quedan archivos de instancia activos; los datos residuales de /var/lib/koha se conservan."] if paths.get("site_dir") else [])
+                module.exit_json(changed=False, instance=name, name=name, state="absent", actions=[], notices=["No quedan archivos de instancia activos; los datos residuales de /var/lib/koha se conservan."] if paths.get("site_dir") else [])
             if p.get("confirm_instance", p.get("confirm_name")) != name or not p.get("confirm_data_loss"):
                 raise ModuleInputError("state=absent elimina archivos y servicios; confirme con confirm_instance=instance y confirm_data_loss=true")
             if module.check_mode:
