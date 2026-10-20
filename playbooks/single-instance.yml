@@ -84,6 +84,7 @@
         instance: "{{ koha_instance }}"
         enabled: true
         state: started
+        reload_apache: true
 
     - name: Arrancar Zebra
       jmz.koha.zebra:

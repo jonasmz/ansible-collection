@@ -5,202 +5,157 @@
 DOCUMENTATION = r'''
 ---
 module: zebra_rebuild
-short_description: Run a one-shot Zebra index update for a Koha instance
+short_description: Reconstruye de forma puntual los índices Zebra de una instancia Koha
 description:
-  - Invokes the packaged C(koha-rebuild-zebra) interface for exactly one Koha instance.
-  - Supports incremental and explicitly requested full rebuilds of bibliographic indexes, authority indexes, or both.
-  - This is an imperative operation and does not manage Zebra or indexer services.
-  - A completed command does not prove index integrity or report a record count.
+  - Invoca C(koha-rebuild-zebra) para exactamente una instancia, en modo incremental o completo, para bibliográficos, autoridades o ambos.
+  - Es una operación imperativa; no administra los servicios Zebra ni del indexador.
+  - Un comando terminado no demuestra la integridad de los índices ni informa el número de registros.
 version_added: "1.3.0"
 author: Jonas MZ
 requirements:
-  - Debian or Ubuntu Koha package providing C(koha-rebuild-zebra), C(koha-list), C(koha-shell), C(koha-zebra), and Koha service helpers
-  - Root privileges (use C(become: true))
+  - Koha empaquetado para Debian/Ubuntu (C(koha-rebuild-zebra), C(koha-list), C(koha-shell), C(koha-zebra)).
+  - Privilegios de root (use C(become=true)).
 options:
   instance:
-    description: One existing Koha instance name. Loop over instances for multiple operations.
+    description: Instancia Koha existente. Use un bucle para varias instancias.
     type: str
     required: true
   mode:
-    description: C(incremental) processes pending updates; C(full) explicitly requests rebuilding the selected collections.
+    description: C(incremental) procesa las actualizaciones pendientes; C(full) reconstruye por completo las colecciones elegidas.
     type: str
     choices: [incremental, full]
     default: incremental
   target:
-    description: Which Zebra index collections to process.
+    description: Colecciones Zebra a procesar.
     type: str
     choices: [all, biblios, authorities]
     default: all
   force:
-    description: Pass C(--force) for incremental work when C(USE_INDEXER_DAEMON) is enabled. Does not bypass other checks.
+    description: Pasa C(--force) al modo incremental cuando C(USE_INDEXER_DAEMON) está activo. Solo es válido con C(mode=incremental).
     type: bool
     default: false
   verbose:
-    description: Number of C(--verbose) flags to pass (0 to 3). Use 0 with C(quiet: true).
+    description: Número de banderas C(--verbose) (0 a 3). Use 0 con C(quiet=true).
     type: int
     choices: [0, 1, 2, 3]
     default: 1
   quiet:
-    description: Pass C(--quiet). Cannot be combined with a nonzero C(verbose) value.
+    description: Pasa C(--quiet). No puede combinarse con un C(verbose) mayor que 0.
     type: bool
     default: false
   verify_search_engine:
-    description: Read Koha's C(SearchEngine) preference and require C(Zebra). Failure to read it is an error.
+    description: Lee la preferencia C(SearchEngine) y exige C(Zebra). Si no puede leerla, falla.
     type: bool
     default: true
   require_zebra_running:
-    description: Require the instance's Zebra service to be running. The service is never started by this module.
+    description: Exige que el servidor Zebra de la instancia esté activo. Este módulo nunca lo arranca.
     type: bool
     default: false
-  command_path:
-    description: Absolute path to the C(koha-rebuild-zebra) executable.
-    type: path
-    default: /usr/sbin/koha-rebuild-zebra
+  timeout:
+    description: Segundos máximos de cada pasada de C(koha-rebuild-zebra). Las demás consultas usan 60 segundos.
+    type: int
+    default: 3600
 notes:
-  - Full rebuilds can consume substantial CPU, memory, disk space, and I/O and may reduce search availability while indexes are regenerated.
-  - The command's upstream output and exit status do not prove functional index integrity. Known warnings and lock failures are classified, but unrecognized output is reported as C(unknown).
-  - The installed command's C(--help) is checked for each requested option. Koha package behavior varies by release; this module has not been validated against every Koha release.
-  - Incremental work is skipped by Koha when C(USE_INDEXER_DAEMON) is not exactly C(no), unless C(force: true) is used. The module reads only a simple static setting from C(/etc/default/koha-common); dynamic or unreadable settings fail closed.
-  - Koha's own rebuild lock is respected. The module does not remove lock files, wait indefinitely, stop services, or retry failed work.
-  - C(async) and C(poll) are Ansible task controls and can be used for long-running full rebuilds.
-  - This operation is imperative: successful execution reports C(changed: true), including an incremental pass that finds no records to change.
-  - In check mode, read-only validations run and the intended command is returned without invoking it.
+  - Una reconstrucción completa consume CPU, memoria, disco y E/S y puede reducir la disponibilidad de la búsqueda mientras se regeneran los índices.
+  - La salida y el código de salida del comando no prueban la integridad funcional de los índices. Se clasifican los avisos y bloqueos de lock conocidos; la salida con código 0 y sin diagnósticos conocidos se da por completada, incluso si está vacía (C(quiet=true)).
+  - Se comprueba que C(--help) del comando instalado anuncie cada opción solicitada.
+  - Con C(USE_INDEXER_DAEMON) distinto de C(no), Koha omite el trabajo incremental salvo con C(force=true); el módulo lo informa con C(work_skipped=true) y sin fallar. Lee solo un valor estático simple de C(/etc/default/koha-common); un valor dinámico o ilegible falla de forma segura.
+  - Se respeta el lock propio de Koha. El módulo no borra locks, no espera indefinidamente, no detiene servicios ni reintenta.
+  - C(async) y C(poll) son controles de tarea de Ansible y sirven para reconstrucciones completas largas.
+  - La operación es imperativa; una ejecución correcta informa C(changed=true), incluso un incremental que no encuentre registros.
+  - En check mode se ejecutan las validaciones de solo lectura y se devuelve el comando previsto sin invocarlo.
 '''
 
 EXAMPLES = r'''
-- name: Initial full Zebra rebuild after starting Zebra
+- name: Reconstrucción completa inicial tras arrancar Zebra
   jmz.koha.zebra_rebuild:
     instance: biblioteca
     mode: full
-    target: all
     require_zebra_running: true
   become: true
 
-- name: Incrementally update only bibliographic indexes
+- name: Actualizar solo los índices bibliográficos
   jmz.koha.zebra_rebuild:
     instance: biblioteca
     target: biblios
   become: true
 
-- name: Force incremental authority indexing when the daemon is enabled
+- name: Forzar el incremental de autoridades con el indexador activo
   jmz.koha.zebra_rebuild:
     instance: biblioteca
     target: authorities
     force: true
   become: true
 
-- name: Rebuild several instances independently
+- name: Reconstrucción completa silenciosa
   jmz.koha.zebra_rebuild:
-    instance: "{{ item }}"
+    instance: biblioteca
     mode: full
-  loop: [biblioteca, archivo]
+    quiet: true
+    verbose: 0
   become: true
 
-- name: Run a long full rebuild under Ansible async supervision
+- name: Reconstrucción larga bajo supervisión async
   jmz.koha.zebra_rebuild:
     instance: biblioteca
     mode: full
   async: 7200
   poll: 30
   become: true
-
-- name: Preview the operation and all read-only preflight checks
-  jmz.koha.zebra_rebuild:
-    instance: biblioteca
-    mode: incremental
-  check_mode: true
-  become: true
 '''
 
 RETURN = r'''
-instance:
-  description: Koha instance selected.
-  returned: always
-  type: str
-mode:
-  description: Requested operation mode.
-  returned: always
-  type: str
-target:
-  description: Requested index target.
-  returned: always
-  type: str
+instance: {description: Instancia seleccionada., returned: always, type: str}
+mode: {description: Modo solicitado., returned: always, type: str}
+target: {description: Colecciones solicitadas., returned: always, type: str}
 status:
-  description: Normalized result, C(completed), C(skipped), C(blocked), C(failed), or C(unknown).
+  description: Resultado normalizado, C(completed), C(skipped), C(blocked), C(failed) o C(unknown).
   returned: always
   type: str
-executed:
-  description: Whether the rebuild utility was invoked.
-  returned: always
-  type: bool
-skipped:
-  description: Whether Koha or preflight rules skipped the requested work.
-  returned: always
-  type: bool
-skip_reason:
-  description: Explanation when work was skipped.
-  returned: always
-  type: str
+executed: {description: Si se invocó la utilidad de reconstrucción., returned: always, type: bool}
+work_skipped: {description: Si Koha o las reglas previas omitieron el trabajo solicitado., returned: always, type: bool}
+skip_reason: {description: Explicación cuando se omitió el trabajo., returned: always, type: str}
 command:
-  description: Safe argv representation of the planned or executed command(s).
+  description: Comandos previstos o ejecutados.
   returned: always
   type: list
   elements: list
-rc:
-  description: Return code for one target, or null when there are multiple targets or execution did not occur.
-  returned: always
-  type: int
-duration:
-  description: Total rebuild invocation time in seconds, or null when not executed.
-  returned: always
-  type: float
-search_engine:
-  description: Verified SearchEngine preference, or null when verification was disabled.
-  returned: always
-  type: str
-zebra_running:
-  description: Zebra runtime observation when required, otherwise null.
-  returned: always
-  type: bool
+rc: {description: Código de salida con un solo objetivo; nulo con varios o sin ejecución., returned: always, type: int}
+duration: {description: Segundos totales de la reconstrucción; nulo si no se ejecutó., returned: always, type: float}
+search_engine: {description: SearchEngine verificado; nulo si no se verificó., returned: always, type: str}
+zebra_running: {description: Estado de Zebra si se exigió comprobarlo., returned: always, type: bool}
 target_results:
-  description: Per-target results. Record counts are null because command output is not a stable count interface.
+  description: Resultado por objetivo. El recuento de registros es nulo porque la salida no es una interfaz estable.
   returned: always
   type: dict
-stdout:
-  description: Combined bounded stdout from rebuild invocations.
-  returned: always
-  type: str
-stderr:
-  description: Combined bounded stderr from rebuild invocations.
-  returned: always
-  type: str
-msg:
-  description: Human-readable summary.
-  returned: always
-  type: str
+stdout: {description: Salida estándar acotada de las invocaciones., returned: always, type: str}
+stderr: {description: Salida de error acotada de las invocaciones., returned: always, type: str}
+diagnostics: {description: Llamadas realizadas a comandos de Koha, con salida acotada., returned: when failed or after a run, type: list, elements: dict}
+msg: {description: Resumen del resultado., returned: always, type: str}
 '''
 
-import grp
-import os
-import pwd
+import contextlib
 import re
-import shlex
 import time
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
+from ansible_collections.jmz.koha.plugins.module_utils import koha_service as svc
 
 
-INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
-OUTPUT_LIMIT = 12000
+QUERY_TIMEOUT = 60
 TARGET_FLAGS = {"biblios": "--biblios", "authorities": "--authorities"}
-WARNING_PATTERNS = (
+# Patterns that are specific enough to trust whatever the exit status says.
+KNOWN_PATTERNS = (
     (re.compile(r"something went wrong rebuilding biblio indexes", re.I), "biblios", "failed"),
     (re.compile(r"something went wrong rebuilding authority indexes", re.I), "authorities", "failed"),
     (re.compile(r"unknown instance", re.I), None, "failed"),
     (re.compile(r"(?:unable|failed|could not|cannot|can't).{0,80}(?:obtain|acquire|create|get).{0,40}lock|lock.{0,50}(?:busy|unavailable|failed|already exists)", re.I), None, "blocked"),
     (re.compile(r"(?:continuing|proceeding|running).{0,50}without.{0,30}lock|without.{0,30}(?:a )?lock.{0,30}(?:continue|proceed|run)", re.I), None, "blocked"),
     (re.compile(r"(?:skipped|skipping).{0,80}(?:rebuild|index(?:ing)?|bibliographic|authority)", re.I), None, "skipped"),
+)
+# Generic words only count when the command also failed; record titles can contain them.
+GENERIC_PATTERNS = (
     (re.compile(r"\b(?:fatal|error|failed|failure)\b", re.I), None, "failed"),
     (re.compile(r"\bwarning\b", re.I), None, "unknown"),
 )
@@ -210,134 +165,43 @@ class RebuildError(Exception):
     """Unsafe or unverified rebuild request."""
 
 
-def _bounded(value):
-    return (value or "")[:OUTPUT_LIMIT]
-
-
-def _run(module, argv, diagnostics, operation):
-    try:
-        rc, stdout, stderr = module.run_command(argv)
-    except OSError as exc:
-        diagnostics.append(dict(operation=operation, command=argv, rc=None, stdout="", stderr=_bounded(str(exc))))
-        raise RebuildError("Unable to execute %s: %s" % (argv[0], exc))
-    stdout, stderr = stdout or "", stderr or ""
-    diagnostics.append(dict(operation=operation, command=argv, rc=rc,
-                            stdout=_bounded(stdout), stderr=_bounded(stderr)))
-    return rc, stdout, stderr
-
-
 def validate_arguments(p):
-    if not INSTANCE_RE.fullmatch(p["instance"] or ""):
-        raise RebuildError("instance must be 1-11 lowercase letters, digits, or hyphens, starting with a letter")
     if p["mode"] == "full" and p["force"]:
-        raise RebuildError("force is only valid with mode=incremental; mode=full already bypasses USE_INDEXER_DAEMON")
+        raise RebuildError("force solo es válido con mode=incremental; mode=full ya ignora USE_INDEXER_DAEMON")
     if p["quiet"] and p["verbose"] > 0:
-        raise RebuildError("quiet=true conflicts with verbose greater than 0; set verbose=0")
-    if not os.path.isabs(p["command_path"]):
-        raise RebuildError("command_path must be absolute")
+        raise RebuildError("quiet=true es incompatible con verbose mayor que 0; use verbose=0")
+    if p["timeout"] <= 0:
+        raise RebuildError("timeout debe ser positivo")
 
 
 def validate_instance(module, instance, diagnostics):
-    config = "/etc/koha/sites/%s/koha-conf.xml" % instance
-    site = "/etc/koha/sites/%s" % instance
-    if not os.path.isdir(site) or not os.path.isfile(config):
-        raise RebuildError("Koha instance %s does not exist or its koha-conf.xml is missing" % instance)
-    binary = module.get_bin_path("koha-list", required=False)
-    if not binary:
-        raise RebuildError("koha-list was not found; cannot independently verify instance %s" % instance)
-    rc, stdout, stderr = _run(module, [binary], diagnostics, "verify_instance")
-    if rc != 0 or instance not in stdout.splitlines():
-        raise RebuildError("koha-list did not confirm instance %s (rc=%s): %s" %
-                           (instance, rc, _bounded(stderr or stdout).strip()))
-    try:
-        pwd.getpwnam(instance + "-koha")
-        grp.getgrnam(instance + "-koha")
-    except KeyError:
-        raise RebuildError("system user or group %s-koha does not exist" % instance)
-    if os.geteuid() != 0:
-        raise RebuildError("root privileges are required to invoke koha-rebuild-zebra safely; run this task with become: true")
+    svc.check_instance(module, instance, diagnostics, QUERY_TIMEOUT)
+    svc.require_root(module)
 
 
-def resolve_command(module, path):
-    resolved = path
-    if path == "/usr/sbin/koha-rebuild-zebra":
-        resolved = module.get_bin_path("koha-rebuild-zebra", required=False)
-        if not resolved:
-            raise RebuildError("koha-rebuild-zebra was not found on the managed host")
-    if not os.path.isabs(resolved) or not os.path.isfile(resolved) or not os.access(resolved, os.X_OK):
-        raise RebuildError("koha-rebuild-zebra is missing or not executable: %s" % resolved)
-    return resolved
-
-
-def detect_search_engine(module, instance, diagnostics):
-    shell = module.get_bin_path("koha-shell", required=False)
-    pref = "/usr/share/koha/bin/admin/koha-preferences"
-    if not shell or not os.path.isfile(pref) or not os.access(pref, os.X_OK):
-        raise RebuildError("Cannot verify SearchEngine: koha-shell or executable koha-preferences is unavailable")
-    # instance is restricted to safe Koha instance characters; the payload is one argv item.
-    rc, stdout, stderr = _run(module, [shell, instance, "-c", "%s get SearchEngine 2>/dev/null" % pref],
-                              diagnostics, "inspect_search_engine")
-    value = stdout.strip()
-    if rc != 0 or value not in ("Zebra", "Elasticsearch"):
-        raise RebuildError("Unable to reliably read SearchEngine for %s (rc=%s): %s" %
-                           (instance, rc, _bounded(stderr or stdout).strip() or "unrecognized value"))
+def check_search_engine(module, instance, diagnostics):
+    value = svc.search_engine(module, instance, diagnostics, QUERY_TIMEOUT)
     if value != "Zebra":
-        raise RebuildError("Refusing Zebra rebuild for %s: SearchEngine is %s" % (instance, value))
+        raise RebuildError("no se reconstruye Zebra en %s: SearchEngine es %s" % (instance, value))
     return value
 
 
 def check_zebra_service(module, instance, diagnostics):
-    binary = module.get_bin_path("koha-zebra", required=False)
-    if not binary:
-        raise RebuildError("Cannot verify Zebra runtime: koha-zebra was not found")
-    rc, stdout, stderr = _run(module, [binary, "--status", instance], diagnostics, "inspect_zebra")
-    text = (stdout + "\n" + stderr).lower()
-    escaped = re.escape(instance.lower())
-    if re.search(r"zebra[^\n]*(?:not running|stopped)[^\n]*\b%s\b|not running for instance\s+%s\b" %
-                 (escaped, escaped), text):
-        return False
-    if re.search(r"zebra[^\n]*running[^\n]*\b%s\b|running for instance\s+%s\b" % (escaped, escaped), text):
-        return True
-    raise RebuildError("Unable to determine Zebra runtime for %s (rc=%s): %s" %
-                       (instance, rc, _bounded(stderr or stdout).strip() or "unrecognized status"))
+    daemon = svc.Daemon(module, "zebra", svc.find_command(module, "koha-zebra"), instance, diagnostics, QUERY_TIMEOUT)
+    return daemon.status() == "started"
 
 
 def inspect_indexer_configuration():
-    """Read only a static USE_INDEXER_DAEMON assignment, never source root shell code."""
-    path = "/etc/default/koha-common"
-    if not os.path.isfile(path):
-        # The wrapper sources this file optionally; an unset variable does not equal 'no'.
-        return "enabled_or_unset"
-    try:
-        with open(path, "r", encoding="utf-8") as stream:
-            lines = stream.readlines()
-    except OSError as exc:
-        raise RebuildError("Unable to inspect %s safely: %s" % (path, exc))
-    setting = None
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "USE_INDEXER_DAEMON" not in stripped:
-            continue
-        match = re.fullmatch(r"(?:export\s+)?USE_INDEXER_DAEMON\s*=\s*(.*?)\s*(?:#.*)?", stripped)
-        if not match:
-            raise RebuildError("USE_INDEXER_DAEMON is configured dynamically; refusing to guess whether incremental work will run")
-        raw = match.group(1)
-        try:
-            words = shlex.split(raw, comments=False, posix=True)
-        except ValueError:
-            raise RebuildError("USE_INDEXER_DAEMON cannot be parsed safely")
-        if len(words) > 1 or (words and not re.fullmatch(r"[A-Za-z0-9_-]+", words[0])):
-            raise RebuildError("USE_INDEXER_DAEMON is not a simple static value; refusing to guess")
-        setting = words[0] if words else ""
-    # koha-rebuild-zebra proceeds incrementally only when the value is exactly 'no'.
+    """Read only a static USE_INDEXER_DAEMON assignment; koha-rebuild-zebra works incrementally only for exactly 'no'."""
+    setting = svc.static_default("USE_INDEXER_DAEMON")
     return "disabled" if setting == "no" else "enabled_or_unset"
 
 
 def validate_rebuild_request(module, p, diagnostics):
     validate_arguments(p)
     validate_instance(module, p["instance"], diagnostics)
-    binary = resolve_command(module, p["command_path"])
-    help_rc, help_out, help_err = _run(module, [binary, "--help"], diagnostics, "inspect_cli_options")
+    binary = svc.find_command(module, "koha-rebuild-zebra")
+    help_rc, help_out, help_err = svc.run(module, [binary, "--help"], diagnostics, "inspect_cli_options", QUERY_TIMEOUT)
     help_text = help_out + "\n" + help_err
     expected = ["--full"] if p["mode"] == "full" else []
     expected += [TARGET_FLAGS[key] for key in ("biblios", "authorities") if p["target"] in ("all", key)]
@@ -348,15 +212,15 @@ def validate_rebuild_request(module, p, diagnostics):
     if p["verbose"]:
         expected.append("--verbose")
     if help_rc != 0:
-        raise RebuildError("Unable to inspect koha-rebuild-zebra --help (rc=%s): %s" %
-                           (help_rc, _bounded(help_err or help_out).strip()))
+        raise RebuildError("no se pudo consultar koha-rebuild-zebra --help (rc=%s): %s"
+                           % (help_rc, svc.bounded(help_err or help_out).strip()))
     for option in expected:
         if not re.search(r"(?m)(?:^|\s)%s(?:\s|$|\|)" % re.escape(option), help_text):
-            raise RebuildError("Installed koha-rebuild-zebra does not advertise required option %s" % option)
-    engine = detect_search_engine(module, p["instance"], diagnostics) if p["verify_search_engine"] else None
+            raise RebuildError("el koha-rebuild-zebra instalado no anuncia la opción requerida %s" % option)
+    engine = check_search_engine(module, p["instance"], diagnostics) if p["verify_search_engine"] else None
     zebra = check_zebra_service(module, p["instance"], diagnostics) if p["require_zebra_running"] else None
     if p["require_zebra_running"] and not zebra:
-        raise RebuildError("Zebra is not running for %s; start it with jmz.koha.zebra before rebuilding" % p["instance"])
+        raise RebuildError("Zebra está detenido para %s; arránquelo con jmz.koha.zebra antes de reconstruir" % p["instance"])
     indexer = inspect_indexer_configuration() if p["mode"] == "incremental" else None
     return binary, engine, zebra, indexer
 
@@ -376,26 +240,29 @@ def build_rebuild_command(binary, p, target):
     return argv
 
 
+def _empty_results():
+    return {key: dict(status="unknown", executed=False, rc=None, records_processed=None, msg="No procesado")
+            for key in ("biblios", "authorities")}
+
+
 def parse_target_results(targets, outputs):
-    results = {key: dict(status="unknown", executed=False, rc=None, records_processed=None, msg="Not processed")
-               for key in ("biblios", "authorities")}
+    results = _empty_results()
     for target in targets:
         rc, stdout, stderr = outputs[target]
         text = stdout + "\n" + stderr
         result = dict(status="unknown", executed=True, rc=rc, records_processed=None,
-                      msg="Command completed but the index outcome could not be verified")
-        for pattern, affected, status in WARNING_PATTERNS:
+                      msg="El comando terminó, pero no se pudo verificar el resultado del índice")
+        patterns = KNOWN_PATTERNS + (GENERIC_PATTERNS if rc != 0 else ())
+        for pattern, affected, status in patterns:
             if pattern.search(text) and (affected is None or affected == target):
-                result.update(status=status, msg="Recognized Koha diagnostic: %s" % pattern.pattern)
+                result.update(status=status, msg="Diagnóstico reconocido de Koha: %s" % pattern.pattern)
                 break
         else:
             if rc != 0:
-                result.update(status="failed", msg="koha-rebuild-zebra returned a nonzero status")
-            elif text.strip():
-                # Zero exit status alone is not treated as proof; require no known error and output from the selected pass.
-                result.update(status="completed", msg="The selected Koha pass returned successfully without recognized failure or skip diagnostics; index integrity was not checked")
+                result.update(status="failed", msg="koha-rebuild-zebra devolvió un código de salida distinto de cero")
             else:
-                result.update(status="unknown", msg="No output or independent completion evidence was available")
+                # A quiet run prints nothing; koha-rebuild-zebra exits 0 only when it finished.
+                result.update(status="completed", msg="koha-rebuild-zebra terminó con código 0 sin diagnósticos conocidos; no se comprobó la integridad del índice")
         results[target] = result
     return results
 
@@ -415,13 +282,32 @@ def classify_execution_result(target_results):
     return "completed"
 
 
-def build_module_result(p, targets, commands, status, executed, skipped, skip_reason, engine,
+def build_module_result(p, commands, status, executed, work_skipped, skip_reason, engine,
                         zebra, target_results, stdout, stderr, duration, rc=None):
     return dict(instance=p["instance"], mode=p["mode"], target=p["target"], status=status,
-                executed=executed, skipped=skipped, skip_reason=skip_reason,
+                executed=executed, work_skipped=work_skipped, skip_reason=skip_reason,
                 command=commands, rc=rc, duration=duration, search_engine=engine,
                 zebra_running=zebra, target_results=target_results,
-                stdout=_bounded(stdout), stderr=_bounded(stderr))
+                stdout=svc.bounded(stdout), stderr=svc.bounded(stderr))
+
+
+def run_rebuilds(module, p, targets, commands, diagnostics):
+    """Run each target in turn and stop at the first one that cannot even be executed."""
+    outputs, all_stdout, all_stderr, codes = {}, [], [], []
+    start = time.monotonic()
+    for target, argv in zip(targets, commands):
+        try:
+            rc, stdout, stderr = svc.run(module, argv, diagnostics, "rebuild_%s" % target, p["timeout"])
+        except svc.ServiceError as exc:
+            # A timed-out pass may already have modified indexes: report it as a failed target.
+            rc, stdout, stderr = None, "", str(exc)
+        outputs[target] = (rc, stdout, stderr)
+        all_stdout.append(stdout)
+        all_stderr.append(stderr)
+        codes.append(rc)
+        if rc is None:
+            break
+    return outputs, all_stdout, all_stderr, codes, max(0.0, time.monotonic() - start)
 
 
 def main():
@@ -435,84 +321,56 @@ def main():
             quiet=dict(type="bool", default=False),
             verify_search_engine=dict(type="bool", default=True),
             require_zebra_running=dict(type="bool", default=False),
-            command_path=dict(type="path", default="/usr/sbin/koha-rebuild-zebra"),
+            timeout=dict(type="int", default=3600),
         ), supports_check_mode=True,
     )
     p = module.params
     diagnostics = []
     targets = ["biblios", "authorities"] if p["target"] == "all" else [p["target"]]
-    empty_results = {key: dict(status="unknown", executed=False, rc=None, records_processed=None, msg="Not processed")
-                     for key in ("biblios", "authorities")}
     commands = []
     try:
         binary, engine, zebra, indexer = validate_rebuild_request(module, p, diagnostics)
         commands = [build_rebuild_command(binary, p, target) for target in targets]
         if p["mode"] == "incremental" and indexer == "enabled_or_unset" and not p["force"]:
-            reason = "USE_INDEXER_DAEMON is not confirmed as 'no'; koha-rebuild-zebra would omit incremental work. Set force=true only after coordinating the indexer."
-            result = build_module_result(p, targets, commands, "skipped", False, True, reason, engine, zebra,
-                                         empty_results, "", "", None)
-            result["changed"] = False
-            result["msg"] = reason
+            reason = ("USE_INDEXER_DAEMON no es 'no'; koha-rebuild-zebra omitiría el trabajo incremental porque lo hace el "
+                      "demonio del indexador. Use force=true solo tras coordinarlo con el indexador.")
+            result = build_module_result(p, commands, "skipped", False, True, reason, engine, zebra,
+                                         _empty_results(), "", "", None)
+            result.update(changed=False, msg=reason, diagnostics=diagnostics)
             module.exit_json(**result)
         if module.check_mode:
+            results = _empty_results()
             for target in targets:
-                empty_results[target].update(status="unknown", msg="Would be attempted; check mode does not inspect pending records")
-            result = build_module_result(p, targets, commands, "unknown", False, False, None, engine, zebra,
-                                         empty_results, "", "", None)
-            result["changed"] = True
-            result["msg"] = "Check mode: validated and planned the %s %s operation; index changes are not guaranteed" % (p["mode"], p["target"])
+                results[target].update(msg="Se intentaría; check mode no inspecciona los registros pendientes")
+            result = build_module_result(p, commands, "unknown", False, False, None, engine, zebra, results, "", "", None)
+            result.update(changed=True, diagnostics=diagnostics,
+                          msg="Check mode: se validó y planificó la operación %s de %s; no se garantizan cambios en los índices"
+                          % (p["mode"], p["target"]))
             module.exit_json(**result)
-        outputs = {}
-        all_stdout, all_stderr, codes = [], [], []
-        start = time.monotonic()
-        for target, argv in zip(targets, commands):
-            try:
-                rc, stdout, stderr = _run(module, argv, diagnostics, "rebuild_%s" % target)
-            except RebuildError as exc:
-                outputs[target] = (None, "", str(exc))
-                codes.append(None)
-                all_stderr.append(str(exc))
-                # A previous target may already have modified indexes.
-                target_results = parse_target_results(list(outputs), outputs)
-                target_results[target].update(executed=False, rc=None, status="failed", msg=str(exc))
-                status = classify_execution_result(target_results)
-                duration = max(0.0, time.monotonic() - start)
-                result = build_module_result(p, targets, commands, status, bool(len(outputs) > 1), False, None,
-                                             engine, zebra, target_results, "\n".join(all_stdout),
-                                             "\n".join(all_stderr), duration,
-                                             codes[0] if len(codes) == 1 else None)
-                result.update(changed=len(outputs) > 1, msg="Unable to execute target %s after %s target(s): %s" %
-                              (target, len(outputs) - 1, exc), diagnostics=diagnostics)
-                module.fail_json(**result)
-            outputs[target] = (rc, stdout, stderr)
-            all_stdout.append(stdout)
-            all_stderr.append(stderr)
-            codes.append(rc)
-        duration = max(0.0, time.monotonic() - start)
-        target_results = parse_target_results(targets, outputs)
-        status = classify_execution_result(target_results)
-        result = build_module_result(p, targets, commands, status, True, False, None, engine, zebra,
-                                     target_results, "\n".join(all_stdout), "\n".join(all_stderr), duration,
-                                     codes[0] if len(codes) == 1 else None)
-        skipped_targets = [target for target in targets if target_results[target]["status"] == "skipped"]
-        all_skipped = status == "skipped"
-        result["changed"] = not all_skipped
-        if skipped_targets:
-            result.update(skipped=True, skip_reason="Koha reported skipped index work for: %s" % ", ".join(skipped_targets))
-        if status in ("failed", "blocked", "unknown"):
-            result["msg"] = "Zebra operation %s for %s: %s" % (status, p["instance"], ", ".join(
-                "%s=%s" % (t, target_results[t]["status"]) for t in targets))
-            result["diagnostics"] = diagnostics
-            module.fail_json(**result)
-        result["msg"] = ("Koha reported the selected index pass was skipped for %s" % p["instance"] if all_skipped else
-                          "Koha rebuild command completed for %s (%s); index integrity was not checked" % (p["instance"], p["target"]))
-        result["diagnostics"] = diagnostics
-        module.exit_json(**result)
-    except RebuildError as exc:
-        result = build_module_result(p, targets, commands, "failed", False, False, None, None, None,
-                                     empty_results, "", "", None)
+        with svc.service_lock(p["instance"]):
+            outputs, all_stdout, all_stderr, codes, duration = run_rebuilds(module, p, targets, commands, diagnostics)
+    except (RebuildError, svc.ServiceError) as exc:
+        result = build_module_result(p, commands, "failed", False, False, None, None, None, _empty_results(), "", "", None)
         result.update(changed=False, msg=str(exc), diagnostics=diagnostics)
         module.fail_json(**result)
+    target_results = parse_target_results(list(outputs), outputs)
+    status = classify_execution_result(target_results)
+    result = build_module_result(p, commands, status, True, False, None, engine, zebra, target_results,
+                                 "\n".join(all_stdout), "\n".join(all_stderr), duration,
+                                 codes[0] if len(codes) == 1 else None)
+    skipped_targets = [t for t in targets if target_results[t]["status"] == "skipped"]
+    result["changed"] = status != "skipped"
+    if skipped_targets:
+        result.update(work_skipped=True, skip_reason="Koha informó trabajo omitido en: %s" % ", ".join(skipped_targets))
+    result["diagnostics"] = diagnostics
+    if status in ("failed", "blocked", "unknown"):
+        result["msg"] = "Operación Zebra %s para %s: %s" % (status, p["instance"], ", ".join(
+            "%s=%s" % (t, target_results[t]["status"]) for t in targets))
+        module.fail_json(**result)
+    result["msg"] = ("Koha informó que se omitió la pasada seleccionada para %s" % p["instance"] if status == "skipped" else
+                     "koha-rebuild-zebra terminó para %s (%s); no se comprobó la integridad de los índices"
+                     % (p["instance"], p["target"]))
+    module.exit_json(**result)
 
 
 if __name__ == "__main__":

@@ -15,12 +15,24 @@ releases:
         - localization writes its preferences in one transaction (all or nothing), holds a per-instance lock, drops its no-op state parameter, and translate shares the same lock helper with a bounded wait.
         - initialize only warns when its language is not enabled on an already installed instance instead of failing, so repeating it after localization no longer breaks.
         - localization applies selector positions again (they were rejected on every real database), plans before writing, and explains a killed run by reporting which preferences landed.
+        - plack, zebra, zebra_indexer, worker and zebra_rebuild now share module_utils/koha_service (instance check, per-instance lock that waits up to 30 seconds, command timeout, status parsing and one result shape with previous_state, state, actions, planned and diagnostics).
+        - plack no longer returns rc, which made Ansible fail status and repeated stop on a stopped Plack, and reports changed when enable succeeded but start failed.
+        - plack checks the Apache headers and proxy_http modules before enabling or starting Plack, returns apache_reload_required when enabled changed, and can reload Apache itself with reload_apache.
+        - zebra and zebra_indexer recognise "not running" from the real koha-zebra and koha-indexer status output (stop reported failure, and start did nothing on a stopped service).
+        - worker handles each queue separately, accepts omitting state, and returns workers with previous_state, state and changed per queue.
+        - zebra_rebuild counts a quiet run (exit 0, no output) as completed, only treats the words error, failed and warning as failures when the command exited nonzero, and returns work_skipped instead of skipped so Ansible does not show the task as SKIPPED.
+        - The documentation of the five service modules is in Spanish and parses with ansible-doc (worker and zebra_rebuild did not).
+        - Add the services_lifecycle molecule scenario that runs plack, zebra, zebra_indexer, worker and zebra_rebuild against real Koha.
       breaking_changes:
         - translate no longer accepts dev_instance and no longer returns scope or dev_instance; it never worked on a real koha-conf.xml.
         - initialize no longer loads MariaDB timezone tables or restarts MariaDB (that code never matched a real koha-conf.xml); run mariadb_timezone first.
         - initialize marcflavor takes marc21/unimarc like instance (any case still works); the marc_flavour and maxissuesqty aliases are removed.
         - initialize only masks administrator.password in output, no longer every administrator value.
         - instance no longer accepts the name and confirm_name aliases and no longer returns name; use instance and confirm_instance.
+        - zebra, zebra_indexer and worker no longer accept enabled; Debian Koha packages have no per-instance units, so it always failed (koha-common starts existing instances at boot).
+        - zebra, zebra_indexer and zebra_rebuild no longer accept command_path, and worker no longer accepts the name alias nor returns name or state.
+        - zebra and zebra_indexer state defaults to status and they no longer return backend, enabled, enablement_state or planned_actions (check mode lists the operations in actions with planned true).
+        - zebra_rebuild returns work_skipped instead of skipped.
         - instance state markers use schema_version 2; instances created by earlier builds must be registered again with adopt.
   1.0.0:
     changes:

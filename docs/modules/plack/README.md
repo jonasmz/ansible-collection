@@ -1,43 +1,60 @@
 # `jmz.koha.plack`
 
-Manage the Plack daemon and Plack enablement for one Koha instance. The module requires the Koha package that provides `koha-plack` on the managed host. Use `become: true` for lifecycle or enablement changes; Koha's service and Apache configuration are normally managed as root.
+Administra el demonio Plack de una instancia Koha y su activación en Apache con `koha-plack`.
+Requiere `become: true` para los cambios.
 
-[Module index](../README.md) · [General guide](../../README.md) ·
-[Usage scenarios](examples.md)
+Mientras Plack no esté activado, la instancia se sirve por CGI. Plack acelera Koha sirviendo las
+peticiones desde un proceso persistente detrás de Apache (`proxy_http`).
 
-## Parameters
+[Índice de módulos](../README.md) · [Guía general](../../README.md) ·
+[Escenarios de uso](examples.md)
 
-| Parameter | Type | Required | Values | Description |
+## Parámetros
+
+| Parámetro | Tipo | Requerido | Valores | Descripción |
 | --- | --- | --- | --- | --- |
-| `instance` | string | yes | Koha instance identifier | One instance per task. |
-| `state` | string | no | `started`, `stopped`, `restarted`, `reloaded`, `status` | Daemon state. Omitted means observe only. |
-| `enabled` | boolean | no | `true`, `false` | Enable or disable Plack in the instance's Apache configuration. |
+| `instance` | string | sí | Identificador Koha | Instancia existente. |
+| `state` | string | no | `started`, `stopped`, `restarted`, `reloaded`, `status` | Estado del demonio. Si se omite o es `status`, no se toca. |
+| `enabled` | boolean | no | `true`, `false` | Activa o desactiva Plack en la configuración de Apache de la instancia. No combinable con `state: status`. |
+| `reload_apache` | boolean | no | `true`, `false` | Recarga Apache (`graceful`) si esta ejecución cambió `enabled`. Predeterminado: `false`. |
+| `timeout` | entero | no | segundos | Límite de cada llamada a un comando. Predeterminado: `60`. |
 
-At least one of `state` or `enabled` may be omitted. When both are omitted, the module queries state and makes no changes. `state: status` is read-only and cannot be combined with `enabled`.
+## `enabled`, `state` y Apache
 
-`enabled` and `state` are independent. Koha's `koha-plack --enable` activates the Plack includes for both OPAC and staff interface and, with systemd, enables the unit for boot. It does not start the daemon. `--disable` reverses that configuration and systemd enablement; it does not stop a running daemon. Use `state: stopped` separately when required.
+`enabled` solo descomenta o comenta los dos `Include /etc/koha/apache-shared-{opac,intranet}-plack.conf`
+del sitio de Apache de la instancia (lo hace `koha-plack --enable|--disable`). No arranca ni detiene
+el demonio y **no recarga Apache**, que solo lee los `Include` al recargar. Por eso el resultado
+incluye `apache_reload_required: true` cuando `enabled` cambió y Apache no se recargó. Hay dos formas
+de recargarlo:
 
-## Idempotence and check mode
+- `reload_apache: true`: el módulo ejecuta `apache2ctl graceful` tras el cambio.
+- un `handler` del playbook que recargue Apache (el patrón usado con el módulo `instance`).
 
-The module reads the live Plack status and the active OPAC/intranet Apache includes before deciding whether to call `koha-plack`. `started` and `stopped` are idempotent. `restarted` and `reloaded` are explicit operations and report `changed: true` after success. Repeated enablement requests that already match configuration do not call `koha-plack`; this avoids the upstream utility's non-zero result when enablement is already in place.
+`state` y `enabled` son independientes: se aplican en el orden activar → demonio. En una misma tarea,
+si activar funciona y el arranque falla, el fallo informa `changed: true` y las `actions` ya hechas.
 
-Check mode performs read-only status and configuration queries, reports planned actions, and does not invoke mutating `koha-plack` operations. A requested restart or reload is reported as a planned change.
+## Prerrequisitos de Apache
 
-The module fails if the instance configuration is missing, the daemon status cannot be interpreted, or OPAC and intranet Plack includes disagree. It does not silently treat unknown status output as stopped.
+`koha-plack` necesita los módulos `headers` y `proxy_http` (solo avisa por stderr si faltan). Antes
+de activar Plack o de arrancar, reiniciar o recargar el demonio, el módulo comprueba con
+`apache2ctl -M` y falla con `a2enmod headers proxy_http` como remedio si faltan. Desactivar Plack y
+consultar no lo exigen.
 
-## Usage examples
+## Comportamiento
 
-See [examples.md](examples.md) for scenario-based playbook snippets covering
-service lifecycle, enablement, combined requests, observation, loops, and
-check mode.
+- Idempotente: `started`, `stopped` y `enabled` solo actúan si difieren. `restarted` y `reloaded` son
+  operaciones explícitas (`changed: true`).
+- El estado se lee de `koha-plack --status` (`Plack running for X` / `Plack not running for X`). El
+  módulo **no devuelve el `rc` de `--status`** (3 con el demonio parado), porque Ansible daría la
+  tarea por fallida.
+- Mismo lock por instancia y timeouts que [`jmz.koha.zebra`](../zebra/README.md). Check mode
+  proyecta `running`, `enabled` y `apache_reload_required` sin ejecutar nada.
+- Falla si falta el sitio de Apache, si los `Include` de OPAC e intranet no coinciden o si el estado
+  no se puede interpretar.
 
-## Return values
+## Retorno
 
-The result includes `instance`, `running`, `enabled`, observed `state` (`running` or `stopped`), `actions`, and the status command's `rc`, `stdout`, and `stderr`. Unknown states result in a task failure rather than an invented value.
+`instance`, `running`, `enabled`, `previous_state`, `state` (`started`/`stopped`), `actions`,
+`apache_reload_required`, `planned`, `diagnostics`, `changed` y `msg`.
 
-## Compatibility and limitations
-
-- The collection requires `ansible-core >= 2.15`; the module uses only its standard module API and Python standard library.
-- Koha must provide `koha-plack`, and the module currently follows packaged Koha instance naming (1 to 11 lowercase letters, digits, or hyphens, beginning with a letter).
-- Koha's status command uses systemd status output or the SysV messages `Plack running for <instance>` / `Plack not running for <instance>`. Other or ambiguous output is rejected.
-- The reported `enabled` value reflects Koha's Apache Plack includes. On systemd installations `koha-plack --enable/--disable` also updates the systemd unit's boot enablement.
+Ejemplos en [examples.md](examples.md).

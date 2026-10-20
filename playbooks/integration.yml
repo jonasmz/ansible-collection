@@ -157,9 +157,10 @@
         instance: "{{ koha_instance }}"
         enabled: true
         state: started
+        reload_apache: true
       register: plack_started
 
-    - name: Enable and start Zebra
+    - name: Start Zebra
       jmz.koha.zebra:
         instance: "{{ koha_instance }}"
         state: started
@@ -176,14 +177,14 @@
       poll: 30
       when: koha_run_initial_rebuild | bool
 
-    - name: Enable and start both background worker queues
+    - name: Start both background worker queues
       jmz.koha.worker:
         instance: "{{ koha_instance }}"
         state: started
         queue: all
       register: workers_started
 
-    - name: Enable and start the incremental Zebra indexer
+    - name: Start the incremental Zebra indexer
       jmz.koha.zebra_indexer:
         instance: "{{ koha_instance }}"
         state: started
@@ -248,7 +249,7 @@
           - zebra_rechecked.state == 'started'
           - indexer_rechecked.state == 'started'
           - workers_rechecked.workers | length > 0
-          - workers_rechecked.workers.values() | selectattr('running', 'equalto', true) | list | length == workers_rechecked.workers | length
+          - workers_rechecked.workers.values() | selectattr('state', 'equalto', 'started') | list | length == workers_rechecked.workers | length
           - not instance_rechecked.changed
           - not initialize_rechecked.changed
           - not smtp_rechecked.changed

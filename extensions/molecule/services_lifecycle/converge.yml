@@ -1,0 +1,46 @@
+---
+- name: Create the instance and bring its services to the desired state (also run by the idempotence check)
+  hosts: all
+  become: true
+  tasks:
+    - name: Create instance
+      jmz.koha.instance:
+        instance: "{{ koha_instance }}"
+        db_mode: create
+        marcflavor: marc21
+        zebralang: en
+
+    - name: Initialize Koha (zebra_rebuild needs the search engine preference)
+      jmz.koha.initialize:
+      args: "{{ {'instance': koha_instance} | combine(koha_init) }}"
+
+    - name: Enable Plack
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        enabled: true
+        state: started
+      notify: Reload Apache
+
+    - name: Zebra runs
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: started
+
+    - name: The indexer runs
+      jmz.koha.zebra_indexer:
+        instance: "{{ koha_instance }}"
+        state: started
+
+    - name: Workers run
+      jmz.koha.worker:
+        instance: "{{ koha_instance }}"
+        queue: all
+        state: started
+
+    - ansible.builtin.meta: flush_handlers
+
+  handlers:
+    - name: Reload Apache
+      ansible.builtin.service:
+        name: apache2
+        state: reloaded
