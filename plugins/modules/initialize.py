@@ -28,7 +28,9 @@ options:
     choices: [present, inspect]
     default: present
   language:
-    description: Código de idioma disponible en el catálogo de Koha usado para seleccionar los datos iniciales. Obligatorio con I(state=present).
+    description:
+      - Código de idioma disponible en el catálogo de Koha usado para seleccionar los datos iniciales. Obligatorio con I(state=present).
+      - Solo se usa al instalar. En una instancia ya instalada no se compara con los idiomas habilitados (eso lo administra M(jmz.koha.localization)); si no está habilitado, se emite una advertencia.
     type: str
   marcflavor:
     description:
@@ -220,12 +222,11 @@ import subprocess
 import signal
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import ModuleInputError, choice_normalizer
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import NAME_RE, ModuleInputError, choice_normalizer
 from ansible_collections.jmz.koha.plugins.module_utils.koha_lock import exclusive_lock
 
 
 HELPER_RE = re.compile(r"^/tmp/ansible-koha-initialize-[0-9a-f]{32}/initialize\.pl$")
-INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,10}$")
 LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.(?:sql|yml)$")
@@ -272,7 +273,7 @@ def _normalize_rules(rules):
 def _validate_params(module):
     p = module.params
     instance = p["instance"]
-    if not INSTANCE_RE.fullmatch(instance):
+    if not NAME_RE.fullmatch(instance):
         raise InitializeError("instance debe ser un identificador Koha válido (1-11 caracteres, minúsculas, números o guiones)")
     if p["state"] == "inspect":
         onboarding = ("language", "marcflavor", "library", "patron_categories", "administrator", "item_types", "circulation_rules")
@@ -330,6 +331,11 @@ def _validate_params(module):
     for identifier in p["sample_data"]:
         if not IDENTIFIER_RE.fullmatch(identifier) or ".." in identifier.split("/"):
             raise InitializeError("sample_data solo acepta identificadores del catálogo Koha en formato section/file.sql")
+
+
+def _warn(module, warnings):
+    for warning in warnings or []:
+        module.warn(str(warning))
 
 
 def _redact(text, secrets):
@@ -499,11 +505,11 @@ def main():
                 plan_result = dict(
                     changed=bool(plan.get("changed")), instance=instance, previous_state=previous, current_state=previous,
                     planned=True, partial=not complete, actions=plan.get("actions", []), state_info=plan.get("state_info"),
-                    warnings=plan.get("warnings", []),
                     msg=("Modo de comprobación: las entidades y reglas declaradas se evaluaron con las APIs de Koha y se revirtieron."
                          if complete else
                          "Modo de comprobación: la instalación del esquema y los datos de Koha no se puede simular; "
                          "se informan las acciones previstas sin verificar conflictos de entidades."))
+                _warn(module, plan.get("warnings"))
                 module.exit_json(**plan_result)
             initializing = True
             result = _read_protocol(module, command, request, p["timeout"])
@@ -513,23 +519,25 @@ def main():
             success = dict(changed=bool(result.get("changed")), instance=instance,
                            previous_state=result.get("previous_state", previous), current_state=current,
                            actions=result.get("actions", []), validation=result.get("validation", {}),
-                           state_info=result.get("state_info"), warnings=result.get("warnings", []),
+                           state_info=result.get("state_info"),
                            msg="La inicialización de Koha y el onboarding finalizaron correctamente.")
             if module._diff:
                 success["diff"] = {"before": previous, "after": current}
+            _warn(module, result.get("warnings"))
             module.exit_json(**success)
     except (InitializeError, ModuleInputError, OSError, ValueError) as exc:
         details = getattr(exc, "details", {})
         message = str(exc)
         if initializing and details.get("indeterminate"):
             message += " " + _observe_after_failure(module, command, outcome)
+        _warn(module, details.get("warnings"))
         module.fail_json(msg=message, instance=instance,
                          current_state=details.get("current_state", outcome["current_state"]),
                          previous_state=details.get("previous_state", outcome["previous_state"]),
                          state_info=details.get("state_info"),
                          changed=details.get("changed", outcome["changed"]), partial=details.get("partial", outcome["partial"]),
                          actions=details.get("actions", outcome["actions"]),
-                         warnings=details.get("warnings", []), phase=details.get("phase"))
+                         phase=details.get("phase"))
 
 
 if __name__ == "__main__":

@@ -29,12 +29,16 @@ class FakeAnsibleModule:
     diff = False
 
     spec = {}
+    warned = []
 
     def __init__(self, **kwargs):
         self.params = dict(type(self).params)
         self.check_mode = type(self).check_mode
         self._diff = type(self).diff
         type(self).spec = kwargs
+
+    def warn(self, message):
+        type(self).warned.append(message)
 
     def exit_json(self, **kwargs):
         raise ModuleExit(kwargs)
@@ -367,6 +371,21 @@ class InitializeModuleTest(unittest.TestCase):
         FakeAnsibleModule.params = dict(valid_params(), _initialize_helper="/tmp/evil/initialize.pl")
         result = self._run_with_protocol(lambda *_: {"state": "initialized"})
         self.assertIn("helper Perl temporal", result["msg"])
+
+    def test_helper_warnings_are_emitted_with_module_warn(self):
+        FakeAnsibleModule.warned = []
+        self.addCleanup(setattr, FakeAnsibleModule, "warned", [])
+        result, _ = self.run_main([{"state": "initialized"}, {"current_state": "initialized", "previous_state": "initialized",
+                                                              "changed": False, "warnings": ["El idioma es-ES no está habilitado"]}])
+        self.assertEqual(FakeAnsibleModule.warned, ["El idioma es-ES no está habilitado"])
+        self.assertNotIn("warnings", result)
+
+    def test_perl_helper_only_warns_about_an_unenabled_language(self):
+        with open(os.path.join(ROOT, "files/initialize.pl"), encoding="utf-8") as stream:
+            helper = stream.read()
+        self.assertNotIn("language preferences conflict", helper)
+        self.assertIn("jmz.koha.localization", helper)
+        self.assertIn("conflicts with requested flavour", helper)
 
     def test_success_returns_diff_only_when_requested(self):
         answers = lambda: [{"state": "onboarding_required"}, {"current_state": "initialized", "previous_state": "onboarding_required",

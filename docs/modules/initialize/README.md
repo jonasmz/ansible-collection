@@ -91,7 +91,7 @@ eliminarlo, lo informa en `warnings`.
 | --- | --- | --- | --- |
 | `instance` | string | sí | Identificador Koha (1–11 caracteres; minúsculas, números y guiones). |
 | `state` | string | no | `present` (predeterminado) o `inspect`. |
-| `language` | string | para `present` | Código que exista en el catálogo de idiomas instalado. |
+| `language` | string | para `present` | Código que exista en el catálogo de idiomas instalado. Solo selecciona los datos del instalador: en una instancia ya instalada no se compara con los idiomas habilitados (los administra [`jmz.koha.localization`](../localization/README.md)) y, si no está habilitado, se emite una advertencia. |
 | `marcflavor` | string | para `present` | `marc21` o `unimarc`, como en `jmz.koha.instance`; sin distinguir mayúsculas/minúsculas ni espacios externos (Koha lo almacena en mayúsculas); sujeto a frameworks disponibles. No existe el alias `marc_flavour`. |
 | `sample_data` | lista | no | IDs opcionales `sección/archivo.sql` del catálogo de Koha; predeterminado vacío. |
 | `library` | mapa | para `present` | `code`, `name`. No se reconcilia una biblioteca existente. |

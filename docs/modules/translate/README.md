@@ -1,119 +1,112 @@
-# jmz.koha.translate
+# `jmz.koha.translate`
 
-Ensure a Koha translation is installed or absent with the official koha-translate
-command. The module checks current state, runs only the needed operation, and
-verifies the installed-language list afterward.
+Asegura que una traducción de Koha esté instalada o ausente con el comando oficial
+`koha-translate`. El módulo consulta el estado actual, ejecuta solo la operación
+necesaria y verifica después la lista de idiomas instalados.
 
-## Parameters
+[Índice de módulos](../README.md) · [Guía general](../../README.md) ·
+[Ejemplos](examples.md)
 
-| Parameter | Type | Default | Description |
+## Parámetros
+
+| Parámetro | Tipo | Predeterminado | Descripción |
 | --- | --- | --- | --- |
-| name | string | required | Exact language code, such as es-ES. Aliases: language, lang_code. |
-| state | string | present | present or absent. |
-| update | bool | false | Explicitly regenerate when state is present. |
-| dev_instance | string | — | A Koha development instance marked git_install or dev_install. |
-| verbose | bool | false | Pass --verbose. Unsupported together with dev_instance because the Koha CLI has a four-argument limit. |
+| `name` | string | obligatorio | Código exacto de idioma, por ejemplo `es-ES`. No tiene aliases. |
+| `state` | string | `present` | `present` o `absent`. |
+| `update` | boolean | `false` | Regenera la traducción cuando `state` es `present`. |
+| `verbose` | boolean | `false` | Pasa `--verbose`. |
+| `timeout` | entero | `600` | Segundos que puede ejecutarse cada llamada a `koha-translate` antes de ser terminada. Una mutación que lo excede devuelve `changed: true` y `partial: true`. |
 
-Use become: true. The module requires an executable koha-translate and the Koha
-script helpers/resources. On Debian packages, koha-l10n normally provides
-translation PO files. The module does not install dependencies.
+Use `become: true`. El módulo exige un `koha-translate` ejecutable, los ayudantes de
+Koha y los recursos de traducción; en los paquetes de Debian, `koha-l10n` suele
+traer los archivos PO. El módulo no instala dependencias.
 
-## Scope
+## Alcance
 
-Without dev_instance, Koha writes to its shared Debian application tree. This
-operation affects the shared templates used by Koha instances, and Koha's
-install/remove commands clear the cache for enabled instances. Do not loop this
-global operation over production instances.
+Koha escribe en su árbol compartido de aplicación Debian. La operación afecta a las
+plantillas que usan todas las instancias, y los comandos de instalar y quitar limpian
+la caché de las instancias habilitadas. No la repita en bucle por instancia de
+producción. Los checkouts Git o de desarrollo (`koha-translate --dev`) no están
+soportados: la antigua opción `dev_instance` se retiró porque no podía leer un
+`koha-conf.xml` real.
 
-dev_instance selects a Git/development install only. The module verifies the
-Koha config exists and has an enabled git_install or legacy dev_install value.
-A normal production instance is rejected. All observations and operations use
-the same --dev scope, and a failure never falls back to the global tree.
+## Estado e idempotencia
 
-Koha instance names accepted by the Debian helper use lowercase letters,
-numbers, and hyphens, up to 11 characters; names like koha_dev with an
-underscore are invalid. Use the actual valid development instance name, for
-example koha-dev.
+Con `state: present`, el módulo comprueba la lista exacta de instalados. Si el
+idioma no está, comprueba la disponibilidad local y ejecuta `--check` de Koha antes
+de `--install`. Si ya está instalado, no hace nada salvo que se pida `update: true`.
 
-## State and idempotence
+Con `state: absent`, un idioma ya ausente no cambia; uno instalado se quita y se
+verifica su ausencia.
 
-For state present, the module checks the exact installed list. If absent, it
-checks local availability and runs Koha's --check before --install. If already
-installed, it does nothing unless update: true is explicitly requested.
+El idioma `en` se informa como instalado. Koha no permite instalarlo, actualizarlo
+ni quitarlo.
 
-For state absent, an already absent language is unchanged; an installed
-language is removed and its absence is verified.
+Una actualización explícita es destructiva: el script de Koha elimina la traducción
+anterior y la instala de nuevo. No es atómica; un error de instalación tras la
+eliminación puede dejarla ausente. El módulo comprueba antes los archivos PO y
+verifica el estado final, pero no simula un rollback. Como Koha no ofrece una
+comprobación de revisión de las fuentes, `update: true` puede informar `changed` en
+cada ejecución.
 
-The built-in language en is reported installed. Koha does not permit installing,
-updating, or removing it.
+## Disponibilidad y archivos PO
 
-An explicit update is destructive: Koha's script removes the old translation
-then installs it again. The operation is not atomic; an install error after the
-remove may leave the translation absent. The module prechecks PO files and
-checks post-state, but does not implement a fake rollback. Since Koha provides
-no source revision test, update: true can return changed on every run.
+`koha-translate --available` lista los códigos candidatos según los PO de OPAC. No
+demuestra que estén todos los archivos necesarios. Antes de instalar o actualizar,
+el módulo llama a `--check`, que verifica los PO de MARC21, UNIMARC, OPAC, preferencias
+y personal. Un `--check` correcto tampoco demuestra que las plantillas generadas
+funcionen.
 
-## Availability and PO checks
+Si un código no figura localmente, la interfaz oficial no distingue entre un idioma
+desconocido y uno reconocido cuyos PO no están instalados. El módulo lo informa como
+no disponible en los recursos locales e indica revisar `koha-l10n`.
 
-koha-translate --available lists local candidate codes based on OPAC PO files.
-It does not prove the complete set of required files is present. Before install
-or update the module calls --check, which verifies the MARC21, UNIMARC, OPAC
-bootstrap, preference, and staff prog PO files. A successful --check does not
-prove the generated templates are functional.
+## Check mode, diff y caché
 
-If a code is not listed locally, the official local interface cannot determine
-whether it is unknown globally or a recognized language whose PO files are not
-installed. The module reports it as unavailable in local resources and points
-to koha-l10n or the development PO checkout.
+El check mode hace solo consultas de lectura (ayuda, lista, disponibilidad y PO). Si
+hace falta instalar, actualizar o quitar, devuelve `changed: true` y `planned_action`
+sin invocar ninguna operación de modificación ni tomar el lock.
 
-## Check mode, diff mode, and cache
+El diff muestra el estado semántico instalado antes y después; no lee ni muestra los
+archivos generados. En una actualización marca la regeneración como prevista o
+realizada, sin inventar versiones de traducción.
 
-Check mode performs read-only help, list, availability, and PO queries. It
-returns changed: true and planned_action for a required install/update/remove,
-without invoking a modifying operation or creating a lock.
+En el script de Koha 26.05.x, instalar y quitar limpian las cachés. La actualización
+llama a las funciones internas de quitar e instalar, pero no llega a la limpieza de
+caché del nivel superior. El módulo no ejecuta operaciones de caché adicionales.
 
-Diff mode reports semantic installed state before and after. It does not read or
-display generated files. An update diff marks regeneration as planned/performed;
-it does not invent translation versions.
+Instalar plantillas no habilita `OPACLanguages` ni `StaffInterfaceLanguages`, no
+cambia preferencias ni datos SQL, no configura usuarios ni inicializa una instancia.
+Para activar los idiomas use [`jmz.koha.localization`](../localization/README.md).
 
-In the Koha 26.05.x script, install and remove clear caches. Update calls the
-internal remove/install functions but does not reach the top-level cache clear.
-The module does not run extra cache operations.
+## Resultados y errores
 
-Installing templates does not enable OPACLanguages or StaffInterfaceLanguages,
-change system preferences or SQL data, configure users, or initialize an
-instance.
+El módulo devuelve `name`, `state`, `installed`, `available`, `action_executed`,
+`planned_action`, `cmd`, `rc`, `stdout`, `stderr` y `msg`. `available` es nulo si no
+hizo falta consultar la disponibilidad. `cmd` es una lista argv segura, no una cadena
+de shell, y la salida está acotada.
 
-## Results and errors
+Distingue códigos inválidos, recursos locales no disponibles, PO incompletos, falta
+del ejecutable, errores de la CLI, timeouts y estados finales no verificados. Un
+fallo después de invocar un modificador, incluido un timeout, informa `changed: true`
+y `partial: true`, porque las plantillas pueden haber quedado a medias; `installed`
+refleja entonces lo que Koha lista. La salida de `koha-translate` se devuelve con los
+bytes UTF-8 inválidos reemplazados (`fr-FR` imprime uno), de modo que ya no puede
+romper el resultado.
 
-The module returns name, state, installed, available, scope, dev_instance,
-action_executed, planned_action, cmd, rc, stdout, stderr, and msg. available is
-null when no availability query was needed. cmd is a safe argv list, not a shell
-string. Output is bounded.
+Las llamadas que modifican usan un `flock` acotado en `/run/lock`, que espera hasta
+30 s a otra operación del módulo. Solo coordina llamadas de este módulo, no comandos
+externos de Koha.
 
-It distinguishes invalid codes, unavailable local resources, incomplete PO
-files, non-development instances, missing executable/helper errors, CLI errors,
-and unverified post-state where the underlying diagnostic permits. A failure
-after invoking a mutator reports changed: true. Update/remove failures can
-include partial: true because the state may have changed.
+## Compatibilidad
 
-Mutating calls use a bounded flock under /run/lock. Global scope shares one
-lock; development checkouts have separate locks. This only coordinates calls
-from this module, not external Koha commands.
+La implementación se revisó contra los scripts `koha-translate` de Koha 26.05.x y de
+`main`, y el escenario de molecule `translate_localization` (`extensions/molecule`)
+la ejecuta contra `koha-common 26.05.04` con `koha-l10n`: instalar, repetir,
+actualizar, quitar, check mode, idiomas no disponibles, un timeout y la salida no
+UTF-8 de `fr-FR`. Otras versiones requieren verificar el paquete instalado.
 
-## Compatibility
+## Ejemplos
 
-The implementation was checked against upstream Koha 26.05.x and current main
-koha-translate scripts. The collection's recorded deployed version is Koha
-26.05.04.000 on Ubuntu 24.04. The checkout had no installed Koha command, so
-this is source-based compatibility, not an end-to-end claim. Releases other
-than the examined 26.05.x/main interfaces need verification on their installed
-package. The script accepts no more than four command-line arguments, which is
-why verbose and dev_instance cannot be combined.
-
-## Examples
-
-See examples.md for complete playbook tasks and an isolated integration-test
-plan. Destructive tests must use a disposable Koha lab and must never run
-against production.
-
+Vea [examples.md](examples.md). Las pruebas destructivas deben usar un laboratorio
+Koha desechable y nunca producción.

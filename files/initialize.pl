@@ -209,6 +209,8 @@ sub assert_existing_install_preferences {
     my $flavour = C4::Context->preference('marcflavour') || '';
     die "Existing Koha MARC flavour ($flavour) conflicts with requested flavour ($request->{marc_flavour})"
         if $flavour ne $request->{marc_flavour};
+    # The language only selects the installer data. Once Koha is installed jmz.koha.localization owns which
+    # languages are enabled, so a different set is reported but never blocks a repeated run.
     return if $request->{language} eq 'en';
     # Koha 24.11 renamed the staff language preference from "language".
     my $staff_pref = Koha::Database->new->schema->resultset('Systempreference')->find({ variable => 'StaffInterfaceLanguages' })
@@ -217,7 +219,8 @@ sub assert_existing_install_preferences {
     my $opac = C4::Context->preference('OPACLanguages') || '';
     my %staff_languages = map { $_ => 1 } split /\s*,\s*/, $staff;
     my %opac_languages = map { $_ => 1 } split /\s*,\s*/, $opac;
-    die "Existing Koha language preferences conflict with requested language ($request->{language})"
+    push @WARNINGS, "El idioma $request->{language} no está habilitado en las preferencias de idioma de Koha; "
+        . "initialize solo lo usa al instalar y no administra idiomas, use jmz.koha.localization"
         unless $staff_languages{$request->{language}} && $opac_languages{$request->{language}};
 }
 

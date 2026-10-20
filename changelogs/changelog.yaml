@@ -4,13 +4,19 @@ releases:
     changes:
       minor_changes:
         - Add the smtp module to add a Koha SMTP server and set it as the default without touching the packaged default.
+        - Add the translate and localization modules (translate takes name only, without the language and lang_code aliases).
         - Add the mariadb_timezone module; instance no longer loads MariaDB timezone tables or restarts MariaDB, and the module restarts it only when restart=true and the loaded tables are not enough.
         - Add adopt to instance to register an existing complete instance without rebuilding it.
         - Rebuild (repair/reconfigure) now backs up and, on failure, restores the instance configuration, reports partial progress, and instance serializes runs with a lock.
         - initialize, smtp and localization now work in check mode (their action plugins share one helper-staging base), and initialize check mode reports the entities a real run would create.
         - instance state=absent can now remove a partial instance whose /etc/koha/sites directory is gone.
         - initialize validates duplicate codes and circulation rule scopes, restricts rule values to scalars, counts superlibrarians in SQL, compares numeric rule values numerically, and reports scrubbed helper stderr when the helper does not answer.
+        - translate runs koha-translate with a timeout, marks any failed or killed mutation as partial, and returns its output with invalid UTF-8 replaced (installing fr-FR used to fail the task although it installed).
+        - localization writes its preferences in one transaction (all or nothing), holds a per-instance lock, drops its no-op state parameter, and translate shares the same lock helper with a bounded wait.
+        - initialize only warns when its language is not enabled on an already installed instance instead of failing, so repeating it after localization no longer breaks.
+        - localization applies selector positions again (they were rejected on every real database), plans before writing, and explains a killed run by reporting which preferences landed.
       breaking_changes:
+        - translate no longer accepts dev_instance and no longer returns scope or dev_instance; it never worked on a real koha-conf.xml.
         - initialize no longer loads MariaDB timezone tables or restarts MariaDB (that code never matched a real koha-conf.xml); run mariadb_timezone first.
         - initialize marcflavor takes marc21/unimarc like instance (any case still works); the marc_flavour and maxissuesqty aliases are removed.
         - initialize only masks administrator.password in output, no longer every administrator value.

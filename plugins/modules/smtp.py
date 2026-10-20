@@ -116,11 +116,10 @@ import stat
 import subprocess
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import NAME_RE, choice_normalizer
 
 
 PROTOCOL = 1
-INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
 HELPER_RE = re.compile(r"^/tmp/ansible-koha-smtp-[0-9a-f]{32}/smtp\.pl$")
 LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?")
 SSL_MODES = ["disabled", "ssl", "starttls"]
@@ -137,7 +136,7 @@ def _is_int(value):
 
 def _validate(params):
     instance = params["instance"]
-    if not INSTANCE_RE.fullmatch(instance):
+    if not NAME_RE.fullmatch(instance):
         raise SmtpError("instance debe tener 1-11 caracteres: minúsculas, números o guiones; debe comenzar por letra")
     server = params["server"]
     name = server["name"]

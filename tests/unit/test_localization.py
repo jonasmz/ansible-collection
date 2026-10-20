@@ -117,6 +117,118 @@ class LocalizationTest(unittest.TestCase):
             with self.assertRaisesRegex(self.module.LocalizationError, "Preference unavailable"):
                 self.module._read_protocol(["koha-shell"], {}, 30)
 
+    def test_helper_failures_without_an_answer_are_marked_indeterminate_and_show_stderr(self):
+        for payload in (b"", b"not-json"):
+            with mock.patch.object(self.module.subprocess, "Popen", return_value=FakeProcess(payload)):
+                with self.assertRaises(self.module.LocalizationError) as raised:
+                    self.module._read_protocol(["koha-shell"], {}, 30)
+            self.assertTrue(raised.exception.details["indeterminate"])
+            self.assertIn("diagnostics go to stderr", str(raised.exception))
+        with mock.patch.object(self.module.subprocess, "Popen", return_value=FakeProcess(
+                b'{"protocol":1,"ok":false,"error":{"message":"boom"},"details":{"updated_preferences":["OPACLanguages"],"partial":true}}', rc=2)):
+            with self.assertRaises(self.module.LocalizationError) as raised:
+                self.module._read_protocol(["koha-shell"], {}, 30)
+        self.assertNotIn("indeterminate", raised.exception.details)
+
+    def run_main(self, protocol, check_mode=False):
+        params = {"instance": "biblioteca", "staff_languages": ["es-ES", "en"], "timeout": 120,
+                  "_localization_helper": "/tmp/ansible-koha-localization-" + "a" * 32 + "/localization.pl"}
+        FakeAnsibleModule.params = params
+        FakeAnsibleModule.check_mode = check_mode
+        calls = []
+
+        def read_protocol(command, request, timeout):
+            calls.append(request["apply"])
+            answer = protocol.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with mock.patch.object(self.module.os.path, "isfile", return_value=True), \
+                mock.patch.object(self.module.os.path, "realpath", side_effect=lambda path: path), \
+                mock.patch.object(self.module.os.path, "islink", return_value=False), \
+                mock.patch.object(self.module.os, "access", return_value=True), \
+                mock.patch.object(self.module.os, "geteuid", return_value=0), \
+                mock.patch.object(self.module.os, "stat", return_value=types.SimpleNamespace(st_mode=0o400)), \
+                mock.patch.object(self.module.pwd, "getpwnam", return_value=object()), \
+                mock.patch.object(self.module, "exclusive_lock", side_effect=lambda *_a, **_k: __import__("contextlib").nullcontext()), \
+                mock.patch.object(self.module, "_read_protocol", side_effect=read_protocol):
+            with self.assertRaises(ModuleExit) as raised:
+                self.module.main()
+        return raised.exception.result, calls
+
+    @staticmethod
+    def answer(updated):
+        return {"koha_version": "26.05", "staff_preference": "StaffInterfaceLanguages", "before": {}, "after": {},
+                "updated_preferences": updated}
+
+    def test_a_real_run_plans_first_and_then_applies(self):
+        result, calls = self.run_main([self.answer(["StaffInterfaceLanguages", "OPACLanguages"]),
+                                       self.answer(["StaffInterfaceLanguages", "OPACLanguages"])])
+        self.assertEqual(calls, [False, True])
+        self.assertTrue(result["changed"])
+
+    def test_nothing_to_change_never_writes(self):
+        result, calls = self.run_main([self.answer([])])
+        self.assertEqual(calls, [False])
+        self.assertFalse(result["changed"])
+
+    def test_check_mode_only_plans(self):
+        result, calls = self.run_main([self.answer(["OPACLanguages"])], check_mode=True)
+        self.assertEqual(calls, [False])
+        self.assertTrue(result["changed"] and result["planned"])
+
+    def test_killed_apply_reports_which_preferences_landed(self):
+        killed = self.module.LocalizationError("koha-shell excedió el límite de 120 segundos", {"indeterminate": True})
+        result, calls = self.run_main([self.answer(["StaffInterfaceLanguages", "OPACLanguages"]), killed,
+                                       self.answer(["OPACLanguages"])])
+        self.assertEqual(calls, [False, True, False])
+        self.assertTrue(result["failed"] and result["changed"] and result["partial"])
+        self.assertEqual(result["updated_preferences"], ["StaffInterfaceLanguages"])
+        self.assertIn("StaffInterfaceLanguages", result["msg"])
+
+    def test_killed_apply_that_changed_nothing_is_not_a_change(self):
+        killed = self.module.LocalizationError("koha-shell excedió el límite", {"indeterminate": True})
+        planned = ["StaffInterfaceLanguages", "OPACLanguages"]
+        result, _ = self.run_main([self.answer(planned), killed, self.answer(planned)])
+        self.assertTrue(result["failed"])
+        self.assertFalse(result["changed"] or result["partial"])
+        self.assertEqual(result["updated_preferences"], [])
+
+    def test_killed_apply_that_cannot_be_observed_is_reported_conservatively(self):
+        killed = self.module.LocalizationError("koha-shell excedió el límite", {"indeterminate": True})
+        result, _ = self.run_main([self.answer(["OPACLanguages"]), killed, self.module.LocalizationError("sin conexión")])
+        self.assertTrue(result["changed"] and result["partial"])
+        self.assertIn("No se pudo determinar", result["msg"])
+
+    def test_helper_reported_failure_keeps_its_partial_details(self):
+        failed = self.module.LocalizationError("boom", {"updated_preferences": ["StaffInterfaceLanguages"], "partial": True})
+        result, calls = self.run_main([self.answer(["StaffInterfaceLanguages", "OPACLanguages"]), failed])
+        self.assertEqual(calls, [False, True])
+        self.assertTrue(result["changed"] and result["partial"])
+        self.assertEqual(result["updated_preferences"], ["StaffInterfaceLanguages"])
+
+    def test_real_runs_hold_the_instance_lock_and_check_mode_does_not(self):
+        with open(os.path.join(ROOT, "plugins/modules/localization.py"), encoding="utf-8") as stream:
+            source = stream.read()
+        self.assertIn('exclusive_lock("localization", instance,', source)
+        self.assertIn("contextlib.nullcontext() if module.check_mode", source)
+
+    def test_preference_updates_are_transactional_in_perl(self):
+        with open(os.path.join(ROOT, "files/localization.pl"), encoding="utf-8") as stream:
+            helper = stream.read()
+        self.assertIn("$schema->txn_begin", helper)
+        self.assertIn("$schema->txn_commit", helper)
+        self.assertIn("$schema->txn_rollback unless $ok", helper)
+        self.assertIn("C4::Context->clear_syspref_cache", helper)
+        self.assertIn("no preference was changed", helper)
+
+    def test_selector_modes_are_validated_in_perl_without_the_database_options_column(self):
+        with open(os.path.join(ROOT, "files/localization.pl"), encoding="utf-8") as stream:
+            helper = stream.read()
+        self.assertNotIn("->options", helper)
+        self.assertIn("qw(top footer both)", helper)
+
     def test_helper_is_independently_packaged(self):
         self.assertTrue(os.path.isfile(os.path.join(ROOT, "files/localization.pl")))
         with open(os.path.join(ROOT, "plugins/modules/localization.py"), encoding="utf-8") as stream:
@@ -151,6 +263,7 @@ class LocalizationTest(unittest.TestCase):
                 mock.patch.object(self.module.os, "geteuid", return_value=0), \
                 mock.patch.object(self.module.os, "stat", return_value=types.SimpleNamespace(st_mode=0o400)), \
                 mock.patch.object(self.module.pwd, "getpwnam", return_value=object()), \
+                mock.patch.object(self.module, "exclusive_lock", side_effect=lambda *_a, **_k: __import__("contextlib").nullcontext()), \
                 mock.patch.object(self.module, "_read_protocol", side_effect=lambda command, request, timeout: calls.append((command, request)) or projected):
             with self.assertRaises(ModuleExit) as raised:
                 self.module.main()
@@ -170,6 +283,7 @@ class LocalizationTest(unittest.TestCase):
                 mock.patch.object(self.module.os, "geteuid", return_value=0), \
                 mock.patch.object(self.module.os, "stat", return_value=types.SimpleNamespace(st_mode=0o400)), \
                 mock.patch.object(self.module.pwd, "getpwnam", return_value=object()), \
+                mock.patch.object(self.module, "exclusive_lock", side_effect=lambda *_a, **_k: __import__("contextlib").nullcontext()), \
                 mock.patch.object(self.module, "_read_protocol", return_value=projected):
             with self.assertRaises(ModuleExit) as raised:
                 self.module.main()

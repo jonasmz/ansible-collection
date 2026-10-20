@@ -1,5 +1,10 @@
 # Auditoría y diseño de `translate`
 
+> Registro histórico del diseño inicial. Después se retiró `dev_instance` (y con él el límite
+> `--dev`/`--verbose`): leía `git_install`, `dev_install` e `intranetdir` en la raíz del
+> `koha-conf.xml`, cuando en un archivo real cuelgan de `<config>`, así que nunca funcionó.
+> Véase el README del módulo para el comportamiento vigente.
+
 ## Repositorio
 
 - La colección `jmz.koha` mantiene módulos auto-contenidos en `plugins/modules/`,

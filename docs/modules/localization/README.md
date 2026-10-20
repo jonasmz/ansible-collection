@@ -40,11 +40,9 @@ corre mediante `koha-shell INSTANCE -c ...`, que selecciona el usuario Koha,
 | `opac_language_selector` | boolean | no | `true` permite elegir idioma; `false` lo desactiva. |
 | `opac_selector_position` | string | no | `top`, `footer` o `both`. |
 | `staff_selector_position` | string | no | `top`, `footer` o `both`. |
-| `state` | string | no | Solo `present`, valor predeterminado. |
 | `timeout` | entero | no | Timeout de `koha-shell`, 120 segundos por omisión. |
 
-Declare por lo menos una opción de configuración además de `instance` y
-`state`. Las listas no pueden estar vacías, tener códigos duplicados ni códigos
+Declare por lo menos una opción de configuración además de `instance`. Las listas no pueden estar vacías, tener códigos duplicados ni códigos
 malformados. Se mantienen exactamente el código, las mayúsculas y el orden.
 Omitir un parámetro conserva su preferencia actual. Por ejemplo, configurar
 solo `staff_languages` no cambia preferencias OPAC ni posiciones de selectores.
@@ -88,9 +86,15 @@ el cambio de preferencia Staff; el manual documenta `top`, `footer`, `both` y
 los valores sí/no para el selector OPAC.
 
 La implementación se diseñó para las APIs presentes en las ramas 24.11 y
-posteriores y conserva el nombre legado anterior a 24.11. En este workspace no
-hay paquete Koha instalado para ejecutar la compatibilidad binaria; valide la
-release exacta en una instancia de ensayo antes de producción.
+posteriores y conserva el nombre legado anterior a 24.11. El escenario de molecule
+`translate_localization` (`extensions/molecule`) la ejecuta contra `koha-common
+26.05.04` real; otras releases deben validarse en una instancia de ensayo antes de
+producción.
+
+Koha no guarda en la base de datos la lista de valores de `OpacLangSelectorMode` y
+`StaffLangSelectorMode` (la columna `options` está vacía y las opciones viven en los
+archivos `.pref` de las plantillas), por lo que el helper valida esas posiciones
+contra la lista fija `top`, `footer` y `both`.
 
 Referencias primarias consultadas: [C4::Context](https://perldoc.koha-community.org/C4/Context.html),
 [C4::Languages](https://perldoc.koha-community.org/C4/Languages.html),
@@ -100,10 +104,11 @@ Referencias primarias consultadas: [C4::Context](https://perldoc.koha-community.
 
 ## Idempotencia, check mode y diff mode
 
-El helper lee el estado real y valida todas las preferencias e idiomas antes
-de la primera escritura. Solo invoca `set_preference` para valores diferentes.
-La escritura usa la API Koha, que actualiza la preferencia y su caché; no se
-ejecuta una limpieza redundante ni se reinicia ningún servicio.
+El módulo planifica primero (una llamada al helper con `apply: false`) y solo escribe
+si algo difiere, de modo que el check mode y una ejecución real coinciden y una
+ejecución sin diferencias no escribe nada. El helper lee el estado real y valida
+todas las preferencias e idiomas antes de la primera escritura, e invoca
+`set_preference` solo para valores diferentes. No se reinicia ningún servicio.
 
 `--check` ejecuta las mismas consultas y validaciones, calcula el estado
 proyectado y no escribe. `--diff` devuelve solo las opciones administradas por
@@ -111,10 +116,18 @@ esa invocación en `diff.before` y `diff.after`. En check mode, `changed` indica
 si habría cambios y `planned: true` aclara que `after` es proyectado. En una
 ejecución normal, `after` contiene los valores deseados que Koha confirmó.
 
-Koha no ofrece una operación transaccional única para un conjunto de llamadas
-`set_preference`. Si una escritura intermedia falla, el error incluye los
-nombres actualizados en el helper; no se simula rollback porque podría borrar
-cambios concurrentes. No se afirma atomicidad global.
+Las preferencias se escriben y se releen dentro de **una sola transacción**: se
+aplican todas o ninguna. Si una escritura falla, se revierte todo, el error indica
+`rolled back` y el resultado informa `updated_preferences: []`, `changed: false` y
+`partial: false`. Tras la transacción se vacía la caché de preferencias para no
+conservar valores leídos mientras estaba abierta.
+
+Una ejecución mutadora toma un lock por instancia bajo `/run/lock`; una segunda
+ejecución simultánea falla en lugar de competir. Si el helper es terminado (timeout)
+o no devuelve JSON, el módulo vuelve a planificar para saber qué preferencias llegaron
+a aplicarse e informa `updated_preferences`, `changed` y `partial` según ello (y de
+forma conservadora si tampoco puede consultarlo). El stderr del helper, acotado y sin
+caracteres de control, se incluye en el mensaje.
 
 ## Retorno y errores
 
@@ -129,7 +142,10 @@ protocolo JSON inválido o error de Koha.
 ## Pruebas
 
 Las pruebas unitarias cubren validadores, orden y configuración parcial,
-protocolo JSON, límites de helper y separación del archivo Perl. No sustituyen
-una integración con Koha. En este entorno no se ejecutó una instancia Koha;
-consulte `examples.md` para una secuencia de integración aislada. Ejecútela solo
-contra instancias descartables.
+protocolo JSON, plan y apply, fallos sin respuesta y la separación del archivo Perl. El
+escenario de molecule `translate_localization` los complementa contra Koha real:
+check mode sin efectos, orden de idiomas, posiciones del selector, errores sin
+cambios, atomicidad (un trigger de base de datos bloquea la segunda escritura y se
+comprueba que la primera se revierte) y su interacción con `jmz.koha.initialize`.
+`examples.md` incluye una secuencia de integración aislada; ejecútela solo contra
+instancias descartables.

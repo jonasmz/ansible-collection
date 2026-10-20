@@ -38,11 +38,6 @@ options:
     description: Posición del selector Staff.
     type: str
     choices: [top, footer, both]
-  state:
-    description: Estado declarativo; localization administra preferencias estructurales y solo admite present.
-    type: str
-    choices: [present]
-    default: present
   timeout:
     description: Límite en segundos para la consulta o actualización en koha-shell.
     type: int
@@ -85,6 +80,7 @@ updated_preferences: {description: Preferencias escritas en ejecución normal o 
 planned: {description: after representa el resultado proyectado en check mode, returned: check mode, type: bool}
 '''
 
+import contextlib
 import json
 import os
 import pwd
@@ -93,14 +89,16 @@ import stat
 import subprocess
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import NAME_RE, ModuleInputError, choice_normalizer
+from ansible_collections.jmz.koha.plugins.module_utils.koha_lock import exclusive_lock
 
 
 PROTOCOL = 1
-INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
 LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
 HELPER_RE = re.compile(r"^/tmp/ansible-koha-localization-[0-9a-f]{32}/localization\.pl$")
 OUTPUT_LIMIT = 6000
+STDERR_LIMIT = 600
+OBSERVE_TIMEOUT = 60
 CONFIG_KEYS = ("staff_languages", "opac_languages", "opac_language_selector",
                "opac_selector_position", "staff_selector_position")
 
@@ -114,7 +112,7 @@ class LocalizationError(Exception):
 
 
 def validate_instance(value):
-    if not isinstance(value, str) or not INSTANCE_RE.fullmatch(value):
+    if not isinstance(value, str) or not NAME_RE.fullmatch(value):
         raise LocalizationError("instance debe ser un nombre Koha válido (1-11 minúsculas, números o guiones)")
     return value
 
@@ -153,7 +151,7 @@ def build_desired(params):
         if params.get(key) is not None:
             desired[key] = normalize_position(params[key])
     if not desired:
-        raise LocalizationError("declare al menos una preferencia de configuración además de instance y state")
+        raise LocalizationError("declare al menos una preferencia de configuración además de instance")
     return desired
 
 
@@ -173,16 +171,19 @@ def _read_protocol(command, request, timeout):
                 os.killpg(process.pid, 9)
             except OSError:
                 pass
-        raise LocalizationError("koha-shell excedió el límite de %s segundos" % timeout)
+        raise LocalizationError("koha-shell excedió el límite de %s segundos" % timeout, {"indeterminate": True})
     except OSError as exc:
         raise LocalizationError("no se pudo ejecutar koha-shell: %s" % exc)
     try:
         payload = json.loads(stdout.decode("utf-8"))
     except (UnicodeDecodeError, TypeError, ValueError):
-        raise LocalizationError("el helper Perl no devolvió JSON válido (rc=%s)" % process.returncode,
-                                {"stderr": stderr.decode("utf-8", "replace")[:OUTPUT_LIMIT]})
+        # Without a JSON answer stderr is the only clue (for example a Perl module that does not
+        # compile). The request carries no secrets, so a shortened, control-free tail is safe.
+        tail = re.sub(r"[\x00-\x08\x0b-\x1f]", " ", stderr.decode("utf-8", "replace").strip())[-STDERR_LIMIT:]
+        message = "el helper Perl no devolvió JSON válido (rc=%s)" % process.returncode
+        raise LocalizationError(message + (": %s" % tail if tail else ""), {"indeterminate": True})
     if not isinstance(payload, dict) or payload.get("protocol") != PROTOCOL or not isinstance(payload.get("ok"), bool):
-        raise LocalizationError("el helper Perl devolvió un protocolo incompleto o incompatible")
+        raise LocalizationError("el helper Perl devolvió un protocolo incompleto o incompatible", {"indeterminate": True})
     if process.returncode != 0 or not payload["ok"]:
         error = payload.get("error") or {}
         raise LocalizationError("%s" % error.get("message", "falló la operación de Koha"),
@@ -199,6 +200,22 @@ def _read_protocol(command, request, timeout):
     return payload
 
 
+def _observe_after_failure(command, request, planned):
+    """Details for a failed apply that gave no usable answer: which planned preferences did land.
+
+    The helper writes preferences one at a time, so a run killed half way may have changed some.
+    A fresh plan lists what is still pending; the rest of the planned set was applied.
+    """
+    try:
+        remaining = _read_protocol(command, dict(request, apply=False), OBSERVE_TIMEOUT)["updated_preferences"]
+    except LocalizationError:
+        return {"updated_preferences": [], "partial": True, "changed": True,
+                "note": "No se pudo determinar qué preferencias se aplicaron; revise la instancia antes de reintentar."}
+    applied = [name for name in planned if name not in remaining]
+    return {"updated_preferences": applied, "partial": bool(applied and remaining), "changed": bool(applied),
+            "note": "Preferencias aplicadas antes del fallo: %s." % (", ".join(applied) or "ninguna")}
+
+
 def main():
     module = AnsibleModule(argument_spec=dict(
         instance=dict(type="str", required=True),
@@ -207,7 +224,6 @@ def main():
         opac_language_selector=dict(type="bool"),
         opac_selector_position=dict(type=choice_normalizer(["top", "footer", "both"]), choices=["top", "footer", "both"]),
         staff_selector_position=dict(type=choice_normalizer(["top", "footer", "both"]), choices=["top", "footer", "both"]),
-        state=dict(type=choice_normalizer(["present"]), choices=["present"], default="present"),
         timeout=dict(type="int", default=120),
         _localization_helper=dict(type="path", required=True, no_log=True),
     ), supports_check_mode=True)
@@ -239,9 +255,24 @@ def main():
             raise LocalizationError("koha-shell no está disponible en el host administrado")
         # Staging path is generated by the collection action plugin and restricted above.
         command = [koha_shell, instance, "-c", "perl %s" % helper]
-        request = {"protocol": PROTOCOL, "operation": "configure", "desired": desired,
-                   "apply": not module.check_mode}
-        payload = _read_protocol(command, request, p["timeout"])
+        request = {"protocol": PROTOCOL, "operation": "configure", "desired": desired}
+        lock = (contextlib.nullcontext() if module.check_mode else
+                exclusive_lock("localization", instance,
+                               "otra ejecución está modificando la localización de la instancia %s; reintente cuando termine" % instance))
+        with lock:
+            # Plan first: it makes check mode and a real run agree, skips the write when nothing differs and
+            # lets a failed write be explained by comparing against the planned set.
+            payload = _read_protocol(command, dict(request, apply=False), p["timeout"])
+            planned = payload["updated_preferences"]
+            if planned and not module.check_mode:
+                try:
+                    payload = _read_protocol(command, dict(request, apply=True), p["timeout"])
+                except LocalizationError as exc:
+                    details = dict(exc.details)
+                    if details.get("indeterminate"):
+                        details.update(_observe_after_failure(command, request, planned))
+                        raise LocalizationError("%s. %s" % (exc, details["note"]), details)
+                    raise
         result = dict(instance=instance, koha_version=payload["koha_version"],
                       staff_preference=payload["staff_preference"], before=payload["before"],
                       after=payload["after"], updated_preferences=payload["updated_preferences"],
@@ -253,11 +284,11 @@ def main():
                          else "La configuración de localización ya coincide." if not result["changed"]
                          else "Preferencias de localización actualizadas.")
         module.exit_json(**result)
-    except (LocalizationError, OSError, ValueError, KeyError) as exc:
+    except (LocalizationError, ModuleInputError, OSError, ValueError, KeyError) as exc:
         details = getattr(exc, "details", {})
-        module.fail_json(msg=str(exc), instance=instance,
-                         updated_preferences=details.get("updated_preferences", []),
-                         partial=details.get("partial", False))
+        updated = details.get("updated_preferences", [])
+        module.fail_json(msg=str(exc), instance=instance, updated_preferences=updated,
+                         changed=details.get("changed", bool(updated)), partial=details.get("partial", False))
 
 
 if __name__ == "__main__":
