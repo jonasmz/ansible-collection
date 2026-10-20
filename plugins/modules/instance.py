@@ -146,14 +146,17 @@ options:
     type: list
     elements: str
   vhosts:
-    description: Overrides de DOMAIN/OPACPORT/OPACPREFIX/OPACSUFFIX/INTRAPORT/INTRAPREFIX/INTRASUFFIX.
+    description:
+      - Overrides de DOMAIN/OPACPORT/OPACPREFIX/OPACSUFFIX/INTRAPORT/INTRAPREFIX/INTRASUFFIX. Si se omite por completo, Koha usa C(/etc/koha/koha-sites.conf).
+      - Al declararlo, solo C(domain) es obligatorio. Los prefijos y sufijos omitidos los resuelve C(koha-create) con C(koha-sites.conf).
+      - Un puerto omitido no hereda de C(koha-sites.conf) sino que vale 80, porque C(koha-create) puede generar un VirtualHost inválido (C(*:None)) si falta.
     type: dict
     options:
-      domain: {description: Sufijo común de dominio Koha, por ejemplo .example.org., type: str}
-      opac_port: {description: Puerto configurado para el VirtualHost OPAC., type: int}
+      domain: {description: "Sufijo común de dominio Koha, por ejemplo .example.org. Obligatorio.", type: str, required: true}
+      opac_port: {description: "Puerto del VirtualHost OPAC. Si se omite, 80.", type: int}
       opac_prefix: {description: Prefijo agregado al nombre de host OPAC., type: str}
       opac_suffix: {description: Sufijo agregado al nombre de host OPAC., type: str}
-      staff_port: {description: Puerto configurado para el VirtualHost de personal., type: int}
+      staff_port: {description: "Puerto del VirtualHost de personal. Si se omite, 80.", type: int}
       staff_prefix: {description: Prefijo agregado al nombre de host de personal., type: str}
       staff_suffix: {description: Sufijo agregado al nombre de host de personal., type: str}
   db_request_path:
@@ -296,7 +299,7 @@ ARGUMENT_SPEC = {
     "confirm_instance": {"type": "str"}, "confirm_data_loss": {"type": "bool", "default": False},
     "adopt": {"type": "bool", "default": False}, "repair": {"type": "bool", "default": False}, "reconfigure": {"type": "bool", "default": False},
     "keep_cookies": {"type": "list", "elements": "str"},
-    "vhosts": {"type": "dict", "options": {"domain": {"type": "str"}, "opac_port": {"type": "int"}, "opac_prefix": {"type": "str"}, "opac_suffix": {"type": "str"}, "staff_port": {"type": "int"}, "staff_prefix": {"type": "str"}, "staff_suffix": {"type": "str"}}},
+    "vhosts": {"type": "dict", "options": {"domain": {"type": "str", "required": True}, "opac_port": {"type": "int"}, "opac_prefix": {"type": "str"}, "opac_suffix": {"type": "str"}, "staff_port": {"type": "int"}, "staff_prefix": {"type": "str"}, "staff_suffix": {"type": "str"}}},
     "db_request_path": {"type": "path"}, "koha_create_path": {"type": "path"}, "koha_remove_path": {"type": "path"},
 }
 REBUILD_ACTIONS = ["koha-remove --keep-mysql", "koha-create --use-db"]

@@ -1,0 +1,36 @@
+---
+# Koha, MariaDB and Apache come preinstalled in the image
+# (extensions/molecule/image/build.sh); this only prepares the running container.
+- name: Prepare the container
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for systemd
+      ansible.builtin.command: systemctl is-system-running --wait
+      register: systemd_ready
+      changed_when: false
+      failed_when: systemd_ready.stdout not in ['running', 'degraded']
+
+    - name: The image provides koha-create
+      ansible.builtin.stat:
+        path: /usr/sbin/koha-create
+      register: koha_create
+      failed_when: not koha_create.stat.exists
+      # Build the image first: extensions/molecule/image/build.sh
+
+    - name: MariaDB and Apache are running
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+      loop: [mariadb, apache2]
+
+    - name: koha-create wrapper that passes --help through but always fails otherwise
+      ansible.builtin.copy:
+        dest: /usr/local/bin/koha-create-failing
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          if [ "$1" = "--help" ]; then exec /usr/sbin/koha-create --help; fi
+          echo "simulated koha-create failure" >&2
+          exit 1

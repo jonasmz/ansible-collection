@@ -23,12 +23,15 @@ releases:
         - zebra_rebuild counts a quiet run (exit 0, no output) as completed, only treats the words error, failed and warning as failures when the command exited nonzero, and returns work_skipped instead of skipped so Ansible does not show the task as SKIPPED.
         - The documentation of the five service modules is in Spanish and parses with ansible-doc (worker and zebra_rebuild did not).
         - Add the services_lifecycle molecule scenario that runs plack, zebra, zebra_indexer, worker and zebra_rebuild against real Koha.
+        - smtp holds a per-instance lock while it writes (smtp_servers has no unique index on name), reports changed when Koha was already committed and a later check failed, shows a password change in after.password as "modificada" without revealing it, and returns Koha errors in Spanish without the helper path.
+        - Add the smtp_lifecycle molecule scenario that runs smtp against real Koha, including get_default, the lock and koha-conf.xml staying untouched.
       breaking_changes:
         - translate no longer accepts dev_instance and no longer returns scope or dev_instance; it never worked on a real koha-conf.xml.
         - initialize no longer loads MariaDB timezone tables or restarts MariaDB (that code never matched a real koha-conf.xml); run mariadb_timezone first.
         - initialize marcflavor takes marc21/unimarc like instance (any case still works); the marc_flavour and maxissuesqty aliases are removed.
         - initialize only masks administrator.password in output, no longer every administrator value.
         - instance no longer accepts the name and confirm_name aliases and no longer returns name; use instance and confirm_instance.
+        - smtp renames server.timeout to server.smtp_timeout (the Koha column is timeout) so it is not confused with the koha-shell timeout.
         - zebra, zebra_indexer and worker no longer accept enabled; Debian Koha packages have no per-instance units, so it always failed (koha-common starts existing instances at boot).
         - zebra, zebra_indexer and zebra_rebuild no longer accept command_path, and worker no longer accepts the name alias nor returns name or state.
         - zebra and zebra_indexer state defaults to status and they no longer return backend, enabled, enablement_state or planned_actions (check mode lists the operations in actions with planned true).

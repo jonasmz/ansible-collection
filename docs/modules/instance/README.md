@@ -140,7 +140,7 @@ con datos de origen no confiable.
 | `template_cache_dir`, `timezone`, `upload_path`, `tmp_path` | Flags homónimos; omitidos para heredar defaults. Las tablas de zonas horarias de MariaDB no se cargan aquí. |
 | `message_broker.*` | Opciones `--mb-*`; omitidas si no se definen. No gestiona el servicio externo. |
 | `keep_cookies` | Repetición de `--keep-cookie`, serializada como array `KEEP_COOKIE`. |
-| `vhosts.*` | Variables `DOMAIN`, `OPACPORT`, `OPACPREFIX`, `OPACSUFFIX`, `INTRAPORT`, `INTRAPREFIX`, `INTRASUFFIX`. Si se omite, hereda `koha-sites.conf`. |
+| `vhosts` | Mapa con `domain`, `opac_port`, `opac_prefix`, `opac_suffix`, `staff_port`, `staff_prefix` y `staff_suffix` (variables `DOMAIN`, `OPACPORT`, `OPACPREFIX`, `OPACSUFFIX`, `INTRAPORT`, `INTRAPREFIX`, `INTRASUFFIX`). Si se omite por completo, hereda `koha-sites.conf`. Si se declara, **`domain` es obligatorio**: los prefijos y sufijos omitidos los resuelve `koha-create` con `koha-sites.conf`, y los **puertos** omitidos valen **80** (no heredan), porque `koha-create` puede generar un VirtualHost `*:None` si falta alguno. |
 
 `opac_port` y `staff_port` controlan el puerto del VirtualHost, no la IP de
 escucha de Apache. La dirección de escucha no está expuesta por este módulo;

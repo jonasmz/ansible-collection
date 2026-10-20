@@ -8,6 +8,8 @@ use JSON::PP qw(decode_json encode_json);
 
 my $PROTOCOL = 1;
 my @FIELDS = qw(host port timeout ssl_mode user_name password debug);
+# Set once the transaction commits, so a later failure still reports that Koha was changed.
+my $COMMITTED = 0;
 
 sub emit {
     my ($payload) = @_;
@@ -30,10 +32,11 @@ sub snapshot {
 
 # Report state without the secret: only whether a password is stored.
 sub public_view {
-    my ($state, $is_default) = @_;
+    my ($state, $is_default, $password_changed) = @_;
     return undef unless $state;
     my %view = %{$state};
-    $view{password} = length($view{password}) ? JSON::PP::true : JSON::PP::false;
+    # A password-only change would otherwise leave before and after identical.
+    $view{password} = $password_changed ? 'modificada' : length($view{password}) ? JSON::PP::true : JSON::PP::false;
     $view{debug} = $view{debug} ? JSON::PP::true : JSON::PP::false;
     $view{is_default} = $is_default ? JSON::PP::true : JSON::PP::false;
     return \%view;
@@ -49,11 +52,11 @@ sub differs {
 
 sub run {
     my ($request) = @_;
-    die "Unsupported protocol version" unless ref($request) eq 'HASH' && $request->{protocol} == $PROTOCOL;
-    die "Unsupported operation" unless ($request->{operation} // '') eq 'configure';
+    die "Versión de protocolo no soportada\n" unless ref($request) eq 'HASH' && $request->{protocol} == $PROTOCOL;
+    die "Operación no soportada\n" unless ($request->{operation} // '') eq 'configure';
     my $desired = $request->{desired};
-    die "desired configuration must be an object" unless ref($desired) eq 'HASH';
-    die "apply must be a boolean" unless defined $request->{apply} && ($request->{apply} == 0 || $request->{apply} == 1);
+    die "desired debe ser un objeto\n" unless ref($desired) eq 'HASH';
+    die "apply debe ser booleano\n" unless defined $request->{apply} && ($request->{apply} == 0 || $request->{apply} == 1);
 
     require C4::Context;
     require Koha::Database;
@@ -62,17 +65,17 @@ sub run {
 
     my $context = C4::Context->new;
     $context->set_context;
-    die "Koha is not initialized: run initialize before smtp" if C4::Context->needs_install;
+    die "Koha no está inicializado: ejecute initialize antes de smtp\n" if C4::Context->needs_install;
 
     my $schema = Koha::Database->new->schema;
-    die "This Koha version cannot store a default SMTP server (smtp_servers.is_default is absent)"
+    die "Esta versión de Koha no puede guardar un servidor SMTP predeterminado (falta smtp_servers.is_default)\n"
         unless $schema->resultset('SmtpServer')->result_source->has_column('is_default');
 
     my $name = $desired->{name};
     my %wanted = map { $_ => $desired->{$_} } @FIELDS;
 
     my @matches = Koha::SMTP::Servers->search({ name => $name })->as_list;
-    die "More than one SMTP server is named '$name'; rename the duplicates first" if @matches > 1;
+    die "Hay más de un servidor SMTP llamado '$name'; renombre los duplicados primero\n" if @matches > 1;
     my $server = $matches[0];
     my @defaults = Koha::SMTP::Servers->search({ is_default => 1 })->as_list;
     my @others = grep { !$server || $_->id != $server->id } @defaults;
@@ -97,12 +100,13 @@ sub run {
             }
             $server->set({ is_default => 1 })->store;
         });
+        $COMMITTED = 1;
         $server = Koha::SMTP::Servers->find($server->id);
-        die "Koha did not retain the SMTP server" unless $server;
+        die "Koha no conservó el servidor SMTP\n" unless $server;
         my $actual = snapshot($server);
-        die "Koha did not retain the requested SMTP server values" if differs($actual, \%wanted);
+        die "Koha no conservó los valores pedidos del servidor SMTP\n" if differs($actual, \%wanted);
         my @now = Koha::SMTP::Servers->search({ is_default => 1 })->as_list;
-        die "Koha did not leave '$name' as the only default SMTP server"
+        die "Koha no dejó '$name' como único servidor SMTP predeterminado\n"
             unless @now == 1 && $now[0]->id == $server->id;
     }
 
@@ -116,7 +120,7 @@ sub run {
         server_id => $server ? 0 + $server->id : undef,
         previous_default => @others ? { id => 0 + $others[0]->id, name => $others[0]->name } : undef,
         before => public_view($before, $was_default),
-        after => public_view($after, 1),
+        after => public_view($after, 1, $before && "$before->{password}" ne "$wanted{password}"),
     };
 }
 
@@ -129,6 +133,7 @@ eval {
     my $error = $@ || 'unknown smtp helper failure';
     $error =~ s/[\r\n]+/ /g;
     emit({ protocol => $PROTOCOL, ok => JSON::PP::false,
+           committed => $COMMITTED ? JSON::PP::true : JSON::PP::false,
            error => { type => 'koha_error', message => $error } });
     exit 1;
 };

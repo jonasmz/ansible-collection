@@ -28,12 +28,12 @@ no habilita ni deshabilita el correo saliente y no administra un MTA.
 | `server.name` | string | sí | Nombre en Koha; identifica el servidor para la idempotencia. |
 | `server.host` | string | sí | Hostname DNS o IP válida. |
 | `server.port` | entero | no | 1–65535; predeterminado `25`. |
-| `server.timeout` | entero | no | Positivo; predeterminado `120`. |
+| `server.smtp_timeout` | entero | no | Timeout de la conexión SMTP de Koha, en segundos (la columna `timeout` del servidor). Positivo; predeterminado `120`. |
 | `server.ssl_mode` | string | no | `disabled` (predeterminado), `ssl` o `starttls`; ignora mayúsculas y espacios externos. |
 | `server.user_name` | string | no | Predeterminado `""`. |
 | `server.password` | secreto | no | Predeterminado `""`. Marcada `no_log`. |
 | `server.debug` | boolean | no | Depuración SMTP; predeterminado `false`. |
-| `timeout` | entero | no | Timeout de `koha-shell`, predeterminado 120 s. |
+| `timeout` | entero | no | Timeout de la llamada a `koha-shell`, predeterminado 120 s. No es el de la conexión SMTP (`server.smtp_timeout`). |
 
 Use Ansible Vault y `no_log: true` en tareas con secretos.
 
@@ -55,7 +55,16 @@ Use Ansible Vault y `no_log: true` en tareas con secretos.
 
 Una segunda ejecución con los mismos valores devuelve `changed: false`. Check
 mode no escribe. El diff y el retorno nunca incluyen la contraseña; solo si hay
-una almacenada. Los cambios se aplican en una transacción de base de datos.
+una almacenada. Si esta ejecución cambió la contraseña, `after.password` vale
+`modificada` en lugar de `true`, para que el diff muestre el cambio sin revelarla.
+Los cambios se aplican en una transacción de base de datos y bajo un lock por
+instancia (espera hasta 30 s): la tabla `smtp_servers` no tiene índice único por
+nombre, así que dos ejecuciones simultáneas podrían crear el mismo servidor dos veces.
+
+Si la comprobación posterior a la escritura falla, los cambios ya están
+confirmados y el fallo informa `changed: true`. Si `koha-shell` agota el
+timeout, la transacción no llega a confirmarse y se puede reintentar. Los
+errores de Koha se devuelven en español y sin la ruta del helper temporal.
 
 No se reinicia ningún servicio. El servidor se lee de la base de datos en cada
 envío, por lo que no requiere reiniciar Plack ni los workers.

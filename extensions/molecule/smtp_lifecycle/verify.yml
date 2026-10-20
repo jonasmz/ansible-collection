@@ -1,0 +1,164 @@
+---
+# Fixes the behavior of jmz.koha.smtp against real Koha.
+- name: Verify smtp
+  hosts: all
+  become: true
+  vars:
+    db: "koha_{{ koha_instance }}"
+    primary: {name: Primario, host: smtp.example.test, port: 587, ssl_mode: starttls, user_name: u1, password: Secreto-1234}
+  tasks:
+    # Start from a known state so verify can be repeated against the same container.
+    - name: Remove the SMTP servers left by earlier runs
+      ansible.builtin.command: mysql {{ db }} -e "DELETE FROM smtp_servers"
+      changed_when: false
+    - name: Checksum of koha-conf.xml
+      ansible.builtin.shell: md5sum /etc/koha/sites/{{ koha_instance }}/koha-conf.xml
+      register: conf_before
+      changed_when: false
+    - name: Script that asks Koha which SMTP server is the default
+      ansible.builtin.copy:
+        dest: /usr/local/share/default-smtp.pl
+        mode: "0644"
+        content: |
+          use Koha::SMTP::Servers;
+          my $s = Koha::SMTP::Servers->get_default;
+          print $s->name, " ", $s->host, "\n";
+
+    - name: Check mode creates nothing
+      jmz.koha.smtp: {instance: "{{ koha_instance }}", server: "{{ primary }}"}
+      check_mode: true
+      register: check
+    - name: No server exists yet
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT COUNT(*) FROM smtp_servers"
+      register: count
+      changed_when: false
+    - ansible.builtin.assert:
+        that: [check.changed, check.created, count.stdout == '0']
+
+    - name: Create the server
+      jmz.koha.smtp: {instance: "{{ koha_instance }}", server: "{{ primary }}"}
+      register: create
+      diff: true
+    - name: Repeat
+      jmz.koha.smtp: {instance: "{{ koha_instance }}", server: "{{ primary }}"}
+      register: again
+    - name: Koha uses it as the default
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/default-smtp.pl"
+      register: koha_default
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - create.changed and create.created and create.promoted
+          - create.after.password == true
+          - not again.changed and not again.promoted
+          - koha_default.stdout | trim == 'Primario smtp.example.test'
+
+    - name: Only the password changes
+      jmz.koha.smtp: {instance: "{{ koha_instance }}", server: "{{ primary | combine({'password': 'Otra-5678'}) }}"}
+      register: password
+    - name: Password change is visible without revealing it
+      ansible.builtin.assert:
+        that:
+          - password.changed and password.updated
+          - password.before.password == true
+          - password.after.password == 'modificada'
+          - "'Secreto-1234' not in (create | to_json)"
+          - "'Otra-5678' not in (password | to_json)"
+    - name: The stored password changed
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT password FROM smtp_servers WHERE name='Primario'"
+      register: stored
+      changed_when: false
+      no_log: true
+    - ansible.builtin.assert:
+        that: [stored.stdout == 'Otra-5678']
+      no_log: true
+
+    - name: Other fields change, with the ssl mode normalised and the user cleared
+      jmz.koha.smtp:
+        instance: "{{ koha_instance }}"
+        server: "{{ primary | combine({'password': 'Otra-5678', 'user_name': '', 'ssl_mode': ' SSL ', 'smtp_timeout': 30, 'port': 465}) }}"
+      register: fields
+    - name: Row as stored
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT port, ssl_mode, user_name, timeout FROM smtp_servers WHERE name='Primario'"
+      register: row
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - fields.changed and fields.updated
+          - row.stdout | trim | regex_replace('\s+', ' ') == '465 ssl 30'
+
+    - name: A second server replaces the default
+      jmz.koha.smtp: {instance: "{{ koha_instance }}", server: {name: Segundo, host: 10.0.0.5}}
+      register: second
+    - name: Servers in the database
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT name, is_default FROM smtp_servers ORDER BY id"
+      register: rows
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - second.created and second.promoted
+          - second.previous_default.name == 'Primario'
+          - rows.stdout_lines | map('regex_replace', '\s+', ' ') | list == ['Primario 0', 'Segundo 1']
+
+    - name: Going back to the first server demotes the second without editing it
+      jmz.koha.smtp: {instance: "{{ koha_instance }}", server: "{{ primary }}"}
+      register: back
+    - name: Servers again
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT name, host, is_default FROM smtp_servers ORDER BY id"
+      register: rows_back
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - back.changed and back.promoted and back.previous_default.name == 'Segundo'
+          - rows_back.stdout_lines | map('regex_replace', '\s+', ' ') | list == ['Primario smtp.example.test 1', 'Segundo 10.0.0.5 0']
+
+    - name: Invalid host is rejected before touching Koha
+      jmz.koha.smtp: {instance: "{{ koha_instance }}", server: {name: Mal, host: bad_host.example.test}}
+      register: bad_host
+      failed_when: false
+    - name: Duplicated names are an error
+      ansible.builtin.command: mysql {{ db }} -e "INSERT INTO smtp_servers (name, host) VALUES ('Dup', 'h1'), ('Dup', 'h2')"
+      changed_when: false
+    - name: Declaring the duplicated name
+      jmz.koha.smtp: {instance: "{{ koha_instance }}", server: {name: Dup, host: h1}}
+      register: dup
+      failed_when: false
+    - ansible.builtin.assert:
+        that:
+          - "'server.host' in bad_host.msg"
+          - not dup.changed
+          - "'duplicados' in dup.msg"
+          - "'line' not in dup.msg and '********' not in dup.msg"
+
+    - name: A concurrent run is refused while the lock is held
+      ansible.builtin.shell: |
+        exec 9>/run/lock/ansible-koha-smtp-{{ koha_instance }}.lock
+        flock -n 9 || exit 1
+        sleep 45
+      async: 60
+      poll: 0
+      register: holder
+    - name: Wait for the lock holder to start
+      ansible.builtin.pause: {seconds: 2}
+    - name: Declaring a server meanwhile waits and then fails
+      jmz.koha.smtp:
+        instance: "{{ koha_instance }}"
+        server: {name: Tercero, host: 10.0.0.6}
+      register: locked
+      failed_when: false
+    - name: Wait for the holder to finish
+      ansible.builtin.async_status: {jid: "{{ holder.ansible_job_id }}"}
+      register: holder_done
+      until: holder_done.finished
+      retries: 30
+      delay: 3
+    - ansible.builtin.assert:
+        that:
+          - "'otra ejecución' in locked.msg"
+
+    - name: koha-conf.xml never changed
+      ansible.builtin.shell: md5sum /etc/koha/sites/{{ koha_instance }}/koha-conf.xml
+      register: conf_after
+      changed_when: false
+    - ansible.builtin.assert:
+        that: [conf_before.stdout == conf_after.stdout]
