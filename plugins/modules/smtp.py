@@ -27,10 +27,10 @@ options:
       host: {description: Host SMTP., type: str}
       port: {description: Puerto entre 1 y 65535., type: int}
       timeout: {description: Timeout positivo en segundos., type: int}
-      ssl_mode: {description: Modo TLS., type: str, choices: [disabled, ssl, starttls]}
+      ssl_mode: {description: Modo TLS; acepta mayúsculas/minúsculas y espacios externos., type: str, choices: [disabled, ssl, starttls]}
       user_name: {description: Usuario SMTP; cadena vacía limpia el usuario., type: str}
       password: {description: Secreto; cadena vacía limpia la contraseña., type: str, no_log: true}
-      debug: {description: Depuración SMTP., type: bool}
+      debug: {description: Depuración SMTP; desactivada por defecto., type: bool, default: false}
   admin_email_address:
     description: Valor de la preferencia global KohaAdminEmailAddress; no cambia si se omite.
     type: str
@@ -129,6 +129,7 @@ import tempfile
 import xml.parsers.expat
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
 
 
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
@@ -431,8 +432,8 @@ def main():
             instance=dict(type="str", required=True),
             server=dict(type="dict", options=dict(
                 host=dict(type="str"), port=dict(type="int"), timeout=dict(type="int"),
-                ssl_mode=dict(type="str", choices=["disabled", "ssl", "starttls"]),
-                user_name=dict(type="str"), password=dict(type="str", no_log=True), debug=dict(type="bool"),
+                ssl_mode=dict(type=choice_normalizer(["disabled", "ssl", "starttls"]), choices=["disabled", "ssl", "starttls"]),
+                user_name=dict(type="str"), password=dict(type="str", no_log=True), debug=dict(type="bool", default=False),
             )),
             admin_email_address=dict(type="str"), enabled=dict(type="bool"), timeout=dict(type="int", default=60),
             _smtp_probe=dict(type="path", required=True, no_log=True),

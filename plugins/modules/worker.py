@@ -144,6 +144,7 @@ import os
 import re
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
 
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
@@ -251,8 +252,8 @@ def main():
     module = AnsibleModule(
         argument_spec=dict(
             name=dict(type="str", required=True),
-            state=dict(type="str", choices=["started", "stopped", "restarted", "status"], default="status"),
-            queue=dict(type="str", choices=["default", "long_tasks", "all"], default="default"),
+            state=dict(type=choice_normalizer(["started", "stopped", "restarted", "status"]), choices=["started", "stopped", "restarted", "status"], default="status"),
+            queue=dict(type=choice_normalizer(["default", "long_tasks", "all"]), choices=["default", "long_tasks", "all"], default="default"),
             enabled=dict(type="bool"),
             quiet=dict(type="bool", default=False),
         ),

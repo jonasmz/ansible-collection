@@ -34,15 +34,16 @@ Valide la versión instalada y las APIs `needs_install`,
 | `server.host` | string | no | Host DNS válido. |
 | `server.port` | entero | no | 1–65535; no se fijan puertos según TLS. |
 | `server.timeout` | entero | no | Positivo. |
-| `server.ssl_mode` | string | no | `disabled`, `ssl` o `starttls`. |
+| `server.ssl_mode` | string | no | `disabled`, `ssl` o `starttls`; ignora mayúsculas y espacios externos. |
 | `server.user_name` | string | no | Usuario SMTP; `""` lo limpia. |
 | `server.password` | secreto | no | Contraseña; `""` la limpia. Marcada `no_log`. |
-| `server.debug` | boolean | no | Depuración SMTP. |
+| `server.debug` | boolean | no | Depuración SMTP; valor predeterminado `false` cuando se declara `server`. |
 | `admin_email_address` | string | no | Preferencia global; omitida no cambia. |
 | `enabled` | boolean | no | Habilita o deshabilita el correo de Koha. |
 | `timeout` | entero | no | Timeout de subprocess, predeterminado 60 s. |
 
-Los campos omitidos en `server` conservan los valores actuales. El valor vacío
+Los campos omitidos en `server` conservan los valores actuales, salvo `debug`,
+que toma `false` por defecto cuando se declara el mapa `server`. El valor vacío
 solo limpia usuario o contraseña cuando se declara expresamente. Use Ansible
 Vault y `no_log: true` en tareas con secretos.
 

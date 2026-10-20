@@ -260,15 +260,15 @@ import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import (
-    ModuleInputError, build_argv, db_password_is_safe, ensure_mariadb_timezone, inspect_state, normalize_marcflavor, render_config, validate_params,
+    ModuleInputError, build_argv, choice_normalizer, db_password_is_safe, ensure_mariadb_timezone, inspect_state, render_config, validate_params,
 )
 
 
 ARGUMENT_SPEC = {
-    "name": {"type": "str", "required": True}, "state": {"type": "str", "default": "present", "choices": ["present", "absent"]},
-    "db_mode": {"type": "str", "default": "create", "choices": ["create", "request", "populate", "use"]},
-    "marcflavor": {"type": normalize_marcflavor, "choices": ["marc21", "unimarc"]},
-    "zebralang": {"type": "str", "choices": ["cs", "el", "en", "es", "fr", "nb", "ru", "uk"]},
+    "name": {"type": "str", "required": True}, "state": {"type": choice_normalizer(["present", "absent"]), "default": "present", "choices": ["present", "absent"]},
+    "db_mode": {"type": choice_normalizer(["create", "request", "populate", "use"]), "default": "create", "choices": ["create", "request", "populate", "use"]},
+    "marcflavor": {"type": choice_normalizer(["marc21", "unimarc"]), "choices": ["marc21", "unimarc"]},
+    "zebralang": {"type": choice_normalizer(["cs", "el", "en", "es", "fr", "nb", "ru", "uk"]), "choices": ["cs", "el", "en", "es", "fr", "nb", "ru", "uk"]},
     "elasticsearch_server": {"type": "str"}, "memcached_servers": {"type": "list", "elements": "str"},
     "memcached_prefix": {"type": "str"}, "memcached_enabled": {"type": "bool"}, "enable_sru": {"type": "bool", "default": False},
     "sru_port": {"type": "int"}, "dbhost": {"type": "str"}, "database": {"type": "str"},
@@ -279,7 +279,7 @@ ARGUMENT_SPEC = {
         "host": {"type": "str"}, "port": {"type": "int"}, "username": {"type": "str"},
         "password": {"type": "str", "no_log": True}, "vhost": {"type": "str"}}},
     "db_credentials": {"type": "dict", "no_log": True, "options": {"username": {"type": "str", "required": True}, "password": {"type": "str", "required": True, "no_log": True}}},
-    "letsencrypt": {"type": "bool", "default": False}, "tls_termination": {"type": "str", "choices": ["local", "proxy"]},
+    "letsencrypt": {"type": "bool", "default": False}, "tls_termination": {"type": choice_normalizer(["local", "proxy"]), "choices": ["local", "proxy"]},
     "remove_database": {"type": "bool", "default": False}, "purge_data": {"type": "bool", "default": False},
     "confirm_name": {"type": "str"}, "confirm_data_loss": {"type": "bool", "default": False},
     "repair": {"type": "bool", "default": False}, "reconfigure": {"type": "bool", "default": False},

@@ -78,7 +78,7 @@ y posterior, nunca la contraseña.
 | `instance` | string | sí | Identificador Koha (1–11 caracteres; minúsculas, números y guiones). |
 | `state` | string | no | `present` (predeterminado) o `inspect`. |
 | `language` | string | para `present` | Código que exista en el catálogo de idiomas instalado. |
-| `marc_flavour` | string | para `present` | `MARC21` o `UNIMARC`, sujeto a frameworks disponibles. |
+| `marc_flavour` | string | para `present` | `MARC21` o `UNIMARC`, sin distinguir mayúsculas/minúsculas ni espacios externos; sujeto a frameworks disponibles. |
 | `sample_data` | lista | no | IDs opcionales `sección/archivo.sql` del catálogo de Koha; predeterminado vacío. |
 | `library` | mapa | para `present` | `code`, `name`. No se reconcilia una biblioteca existente. |
 | `patron_categories` | lista | para `present` | Categorías con `code`, `description`, `type`, `enrolment_period`, `default_privacy`. |

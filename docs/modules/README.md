@@ -5,6 +5,10 @@ Esta sección reúne la referencia y las guías de uso de todos los módulos de 
 Cada carpeta de módulo incluye una guía general y un archivo `examples.md` con
 escenarios de uso explicados.
 
+Las opciones con un conjunto declarado de valores aceptados ignoran
+mayúsculas/minúsculas y espacios externos, y se convierten a la grafía canónica
+del módulo antes de validarse. Los textos libres conservan su contenido.
+
 | Módulo | Descripción | Referencia | Ejemplos |
 | --- | --- | --- | --- |
 | [`jmz.koha.instance`](instance/README.md) | Crear y administrar declarativamente una instancia Koha. | [Guía del módulo](instance/README.md) | [Escenarios](instance/examples.md) |

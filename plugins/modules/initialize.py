@@ -225,7 +225,7 @@ import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import (
-    ensure_mariadb_timezone, ModuleInputError,
+    choice_normalizer, ensure_mariadb_timezone, ModuleInputError,
 )
 
 
@@ -367,16 +367,16 @@ def main():
     module = AnsibleModule(
         argument_spec=dict(
             instance=dict(type="str", required=True),
-            state=dict(type="str", choices=["present", "inspect"], default="present"),
+            state=dict(type=choice_normalizer(["present", "inspect"]), choices=["present", "inspect"], default="present"),
             language=dict(type="str"),
-            marc_flavour=dict(type="str", choices=["MARC21", "UNIMARC"]),
+            marc_flavour=dict(type=choice_normalizer(["MARC21", "UNIMARC"]), choices=["MARC21", "UNIMARC"]),
             sample_data=dict(type="list", elements="str", default=[]),
             library=dict(type="dict", options=dict(code=dict(type="str", required=True), name=dict(type="str", required=True))),
             patron_categories=dict(type="list", elements="dict", options=dict(
                 code=dict(type="str", required=True), description=dict(type="str", required=True),
-                type=dict(type="str", choices=["A", "C", "I", "S", "X"], required=True),
+                type=dict(type=choice_normalizer(["A", "C", "I", "S", "X"]), choices=["A", "C", "I", "S", "X"], required=True),
                 enrolment_period=dict(type="int", required=True),
-                default_privacy=dict(type="str", choices=["default", "never", "forever", "holds"], required=True),
+                default_privacy=dict(type=choice_normalizer(["default", "never", "forever", "holds"]), choices=["default", "never", "forever", "holds"], required=True),
             )),
             administrator=dict(type="dict", no_log=True, options=dict(
                 username=dict(type="str", required=True), firstname=dict(type="str", required=True),

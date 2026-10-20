@@ -188,6 +188,7 @@ import shlex
 import time
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
 
 
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
@@ -427,8 +428,8 @@ def main():
     module = AnsibleModule(
         argument_spec=dict(
             instance=dict(type="str", required=True),
-            mode=dict(type="str", choices=["incremental", "full"], default="incremental"),
-            target=dict(type="str", choices=["all", "biblios", "authorities"], default="all"),
+            mode=dict(type=choice_normalizer(["incremental", "full"]), choices=["incremental", "full"], default="incremental"),
+            target=dict(type=choice_normalizer(["all", "biblios", "authorities"]), choices=["all", "biblios", "authorities"], default="all"),
             force=dict(type="bool", default=False),
             verbose=dict(type="int", choices=[0, 1, 2, 3], default=1),
             quiet=dict(type="bool", default=False),

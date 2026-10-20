@@ -26,7 +26,23 @@ def normalize_marcflavor(value):
         return None
     if not isinstance(value, str):
         raise TypeError("marcflavor debe ser texto")
-    return value.lower()
+    return choice_normalizer(["marc21", "unimarc"])(value)
+
+
+def choice_normalizer(choices):
+    """Return a type converter that maps enum input to its canonical choice.
+
+    Enum values are matched without regard to case or surrounding whitespace,
+    then returned using the spelling declared in ``choices``.
+    """
+    canonical = {str(choice).strip().casefold(): choice for choice in choices}
+
+    def normalize(value):
+        if not isinstance(value, str):
+            return value
+        return canonical.get(value.strip().casefold(), value)
+
+    return normalize
 
 
 def db_password_is_safe(value):
