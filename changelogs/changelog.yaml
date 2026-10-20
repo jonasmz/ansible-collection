@@ -3,8 +3,7 @@ releases:
   1.3.0:
     changes:
       minor_changes:
-        - Add the smtp module for Koha SMTP XML, outgoing email enablement and KohaAdminEmailAddress.
-        - Add secure SMTP XML updates, Koha API initialization and database-default conflict detection.
+        - Add the smtp module to add a Koha SMTP server and set it as the default without touching the packaged default.
   1.0.0:
     changes:
       release_summary: Initial release.

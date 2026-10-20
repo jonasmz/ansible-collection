@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT-0
-"""Stage the standalone read-only Koha probe used by smtp."""
+"""Stage the standalone Koha SMTP helper and invoke the module."""
 import os
 import uuid
 
@@ -16,11 +16,11 @@ class ActionModule(ActionBase):
         upload_tmp = None
         try:
             collection_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            source = os.path.join(collection_root, "files", "smtp_probe.pl")
+            source = os.path.join(collection_root, "files", "smtp.pl")
             if not os.path.isfile(source):
-                raise AnsibleActionFail("The collection helper files/smtp_probe.pl is missing")
+                raise AnsibleActionFail("The collection helper files/smtp.pl is missing")
             upload_tmp = self._make_tmp_path()
-            upload_file = upload_tmp + "/smtp_probe.pl"
+            upload_file = upload_tmp + "/smtp.pl"
             self._transfer_file(source, upload_file)
             staged = "/tmp/ansible-koha-smtp-%s" % uuid.uuid4().hex
             directory_result = self._execute_module(
@@ -30,7 +30,7 @@ class ActionModule(ActionBase):
             )
             if directory_result.get("failed"):
                 return directory_result
-            remote_file = staged + "/smtp_probe.pl"
+            remote_file = staged + "/smtp.pl"
             copy_result = self._execute_module(
                 module_name="ansible.builtin.command",
                 module_args={"argv": ["/usr/bin/cp", "--", upload_file, remote_file]},
@@ -46,12 +46,12 @@ class ActionModule(ActionBase):
             if file_result.get("failed"):
                 return file_result
             args = dict(self._task.args)
-            args["_smtp_probe"] = remote_file
+            args["_smtp_helper"] = remote_file
             return self._execute_module("jmz.koha.smtp", args, task_vars=task_vars, tmp=tmp)
         except AnsibleActionFail:
             raise
         except Exception as exc:
-            raise AnsibleActionFail("Unable to stage or run the Koha SMTP probe: %s" % exc)
+            raise AnsibleActionFail("Unable to stage or run the Koha SMTP helper: %s" % exc)
         finally:
             if staged:
                 try:
