@@ -4,6 +4,13 @@ releases:
     changes:
       minor_changes:
         - Add the smtp module to add a Koha SMTP server and set it as the default without touching the packaged default.
+        - Add the mariadb_timezone module; instance no longer loads MariaDB timezone tables or restarts MariaDB.
+        - Add adopt to instance to register an existing complete instance without rebuilding it.
+        - Rebuild (repair/reconfigure) now backs up and, on failure, restores the instance configuration, reports partial progress, and instance serializes runs with a lock.
+        - instance state=absent can now remove a partial instance whose /etc/koha/sites directory is gone.
+      breaking_changes:
+        - instance no longer accepts the name and confirm_name aliases and no longer returns name; use instance and confirm_instance.
+        - instance state markers use schema_version 2; instances created by earlier builds must be registered again with adopt.
   1.0.0:
     changes:
       release_summary: Initial release.

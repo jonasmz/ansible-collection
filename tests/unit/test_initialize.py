@@ -81,6 +81,11 @@ def load_module():
     )
     module = importlib.util.module_from_spec(spec)
     with mock.patch.dict(sys.modules, module_map):
+        tz_spec = importlib.util.spec_from_file_location(
+            "mariadb_timezone_test", os.path.join(ROOT, "plugins/module_utils/mariadb_timezone.py"))
+        tz_helper = importlib.util.module_from_spec(tz_spec)
+        tz_spec.loader.exec_module(tz_helper)
+        sys.modules["ansible_collections.jmz.koha.plugins.module_utils.mariadb_timezone"] = tz_helper
         spec.loader.exec_module(module)
     return module
 

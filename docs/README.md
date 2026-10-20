@@ -31,6 +31,7 @@ Consulte el [índice de módulos](modules/README.md) para ver su interfaz, compo
 | [`jmz.koha.instance`](modules/instance/README.md) | Crear, configurar, inspeccionar, reparar o eliminar una instancia Koha. | [Guía](modules/instance/README.md) | [Escenarios](modules/instance/examples.md) |
 | [`jmz.koha.plack`](modules/plack/README.md) | Administrar el daemon Plack y su habilitación por separado. | [Guía](modules/plack/README.md) | [Escenarios](modules/plack/examples.md) |
 | [`jmz.koha.initialize`](modules/initialize/README.md) | Inicializar la base Koha y el onboarding sin el instalador web. | [Guía](modules/initialize/README.md) | [Escenarios](modules/initialize/examples.md) |
+| [`jmz.koha.mariadb_timezone`](modules/mariadb_timezone/README.md) | Cargar las tablas de zonas horarias de un MariaDB local. | [Guía](modules/mariadb_timezone/README.md) | [Escenarios](modules/mariadb_timezone/examples.md) |
 | [`jmz.koha.smtp`](modules/smtp/README.md) | Agregar un servidor SMTP y establecerlo como predeterminado. | [Guía](modules/smtp/README.md) | [Escenarios](modules/smtp/examples.md) |
 | [`jmz.koha.worker`](modules/worker/README.md) | Administrar workers de background jobs y su habilitación. | [Guía](modules/worker/README.md) | [Escenarios](modules/worker/examples.md) |
 | [`jmz.koha.zebra`](modules/zebra/README.md) | Administrar el servicio Zebra de una instancia. | [Guía](modules/zebra/README.md) | [Escenarios](modules/zebra/examples.md) |

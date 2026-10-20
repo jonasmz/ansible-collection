@@ -225,9 +225,8 @@ import signal
 import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import (
-    choice_normalizer, ensure_mariadb_timezone, ModuleInputError,
-)
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer, ModuleInputError
+from ansible_collections.jmz.koha.plugins.module_utils.mariadb_timezone import ensure_mariadb_timezone
 
 
 INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")

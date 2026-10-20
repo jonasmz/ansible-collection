@@ -10,10 +10,9 @@ completa el onboarding desde la interfaz web.
 Admite `state: present` y los modos nativos `create`, `request`, `populate` y
 `use`. No configura HAProxy ni servicios externos.
 
-El parámetro canónico para identificar la instancia es `instance`, igual que
-en el resto de módulos; `name` y `confirm_name` siguen aceptados como alias de
-entrada para compatibilidad. Los resultados devuelven `instance` y conservan
-`name` como campo de salida legado.
+La instancia se identifica con `instance` y las operaciones destructivas se
+confirman con `confirm_instance`. No existen los alias `name` ni `confirm_name`,
+y los resultados devuelven solo `instance`.
 
 Los ejemplos de creación, bases de datos, vhosts, secretos, reparación,
 reconfiguración y borrado están en la [guía de ejemplos](examples.md).
@@ -30,23 +29,56 @@ módulos y recargar Apache queda a cargo del administrador.
 ### Estados, idempotencia y check mode
 
 El módulo inspecciona `koha-conf.xml`, el sitio Apache, el directorio de datos
-y un marcador propio. Clasifica los estados `absent`, `requested`, `present` y
-`partial`. Una instancia previa completa sin marcador se considera no
-administrada y bloquea ejecución normal; `repair: true` permite reconstruirla
-explícitamente con DB preservada y doble confirmación.
+y un marcador propio. Clasifica la instancia en cinco estados:
 
-En éxito guarda `/var/lib/koha/<instance>/.ansible-koha-instance-state` con estado
-y huella de opciones no secretas. Una repetición idéntica no ejecuta
-`koha-create`; un cambio detectable falla como drift. Cambios externos en
-Apache/DB no se verifican y `present` no significa onboarding web completado.
-`--check` solo informa el plan; no prueba dependencias ni servicios.
+| Estado | Significado |
+| --- | --- |
+| `absent` | No existe ningún recurso de la instancia. |
+| `requested` | Etapa `db_mode: request` completada; falta `populate`. |
+| `present` | Completa y con marcador propio válido. |
+| `unmanaged` | Completa pero sin marcador válido (creada a mano o por otra versión). |
+| `partial` | Faltan recursos. |
 
-Cuando `timezone` contiene una zona IANA y la DB es local (`dbhost` omitido o
-loopback), el módulo comprueba `CONVERT_TZ` y, si faltan tablas, las carga desde
-`/usr/share/zoneinfo` con el cliente administrativo local de MariaDB y reinicia
-MariaDB para activarlas. Se requiere `become: true` y `tzdata`. La provisión
-automática no modifica servidores MariaDB remotos; en esos casos falla con un
-diagnóstico explícito en lugar de dejar que Koha falle más tarde al conectar.
+En éxito guarda `/var/lib/koha/<instance>/.ansible-koha-instance-state` (modo 0600,
+escritura atómica, `schema_version: 2`) con estado y huella de las opciones de
+configuración no secretas. Los parámetros de operación (`db_mode`, rutas de
+binarios, `db_request_path`, credenciales) no entran en la huella. Una repetición
+idéntica no ejecuta `koha-create`; un cambio de configuración falla como drift.
+Cambios externos en Apache/DB no se verifican y `present` no significa onboarding
+web completado. Un marcador de otra versión del esquema no se reconoce: la
+instancia pasa a `unmanaged` y se registra de nuevo con `adopt`.
+
+Las mutaciones toman un lock por instancia (`/run/lock`); una segunda ejecución
+simultánea falla en lugar de competir.
+
+`--check` calcula el mismo plan que la ejecución real, sin exigir root ni
+binarios, y no prueba dependencias ni servicios.
+
+### Adoptar una instancia existente
+
+Una instancia `unmanaged` no se modifica ni se reconstruye implícitamente. Con
+`adopt: true` el módulo solo registra su marcador con la huella de los
+parámetros declarados:
+
+```yaml
+- name: Registrar una instancia creada a mano
+  jmz.koha.instance:
+    instance: biblioteca
+    adopt: true
+    marcflavor: marc21
+    zebralang: es
+  become: true
+```
+
+`adopt` no verifica que la configuración real coincida con los parámetros: estos
+pasan a ser la referencia para detectar drift. No hace nada si la instancia ya
+está administrada y falla si está incompleta o requested. No se combina con
+`repair`, `reconfigure`, `state: absent` ni `db_mode: request/populate`, y no
+exige las confirmaciones destructivas porque no borra nada.
+
+`timezone` solo se pasa a `koha-create`. Koha aplica esa zona IANA a cada sesión
+MariaDB, así que las tablas de zonas horarias deben existir antes de crear la
+instancia: use [`jmz.koha.mariadb_timezone`](../mariadb_timezone/README.md).
 
 ### Integración ejecutada
 
@@ -105,7 +137,7 @@ con datos de origen no confiable.
 | `enable_sru`, `sru_port` | Flags SRU; desactivado por omisión, puerto default 7090. |
 | `database`, `dbhost`, `passwdfile` | `--database` (máx. 64), `--dbhost`, `--passwdfile`. |
 | `defaultsql`, `adminuser` | `--defaultsql`, `--adminuser`; adminuser es ID borrower en importación SQL, no crea cuenta. |
-| `template_cache_dir`, `timezone`, `upload_path`, `tmp_path` | Flags homónimos; omitidos para heredar defaults. Una zona IANA también asegura las tablas de zonas horarias de MariaDB local. |
+| `template_cache_dir`, `timezone`, `upload_path`, `tmp_path` | Flags homónimos; omitidos para heredar defaults. Las tablas de zonas horarias de MariaDB no se cargan aquí. |
 | `message_broker.*` | Opciones `--mb-*`; omitidas si no se definen. No gestiona el servicio externo. |
 | `keep_cookies` | Repetición de `--keep-cookie`, serializada como array `KEEP_COOKIE`. |
 | `vhosts.*` | Variables `DOMAIN`, `OPACPORT`, `OPACPREFIX`, `OPACSUFFIX`, `INTRAPORT`, `INTRAPREFIX`, `INTRASUFFIX`. Si se omite, hereda `koha-sites.conf`. |
@@ -129,22 +161,34 @@ reinicia Apache; DNS público debe apuntar al host y el puerto 80 debe llegar a
 ### Borrado, reparación y reconfiguración explícitos
 
 `state: absent` usa `koha-remove`. La operación exige dos confirmaciones:
-`confirm_instance: biblioteca` y `confirm_data_loss: true` (`confirm_name` sigue disponible como alias). Por defecto pasa
+`confirm_instance: biblioteca` y `confirm_data_loss: true`. Por defecto pasa
 `--keep-mysql` para preservar la DB. `remove_database: true` permite que Koha
 borre su DB convencional `koha_<instance>`; una DB con nombre personalizado puede
 quedar intacta. `purge_data: true` agrega `--purge-all` y elimina datos de
 `/var/lib/koha/<instance>` y spool. Sin `purge_data`, esos archivos se conservan y
 se reportan como residuales.
 
-Si una instancia queda `partial`, `repair: true` reconstruye Apache y los
+`koha-remove` aborta si no existe `/etc/koha/sites/<instance>`. Para poder retirar
+una instancia `partial` que perdió ese directorio, el módulo lo crea vacío antes
+de invocarlo (`koha-remove` lo elimina de nuevo si queda vacío) y lo registra en
+`actions`. Check mode no crea nada.
+
+Si una instancia queda `partial` o `unmanaged`, `repair: true` reconstruye Apache y los
 archivos Koha con `koha-remove --keep-mysql` seguido de `koha-create --use-db`.
 Requiere las mismas dos confirmaciones y poder recuperar credenciales de
 `koha-conf.xml`, o dar `db_credentials`/`passwdfile`. Para cambiar parámetros
 de una instancia completa, `reconfigure: true` usa el mismo flujo y mantiene
 la DB y `/var/lib/koha`. Ambos reinician Apache y reconstruyen la configuración;
-no aplican `defaultsql`, no migran la base y no garantizan recuperación si el
-segundo comando falla. Requieren que el directorio del sitio exista y que
-`koha-remove` esté instalado. Use `--check` para revisar el plan antes.
+no aplican `defaultsql` y no migran la base. Antes de `koha-remove` se copia
+`/etc/koha/sites/<instance>` y el sitio Apache a un directorio privado en
+`/var/backups`. Si `koha-create` falla, `koha-remove` ya habrá borrado el
+usuario del sistema y el sitio Apache, que no se recrean solos, así que la
+instancia queda `partial`. El módulo restaura en `/etc/koha/sites/<instance>` los
+archivos de configuración que falten (para que un `repair: true` posterior pueda
+leer las credenciales de `koha-conf.xml`), conserva el respaldo y lo indica en el
+error; `actions` y `partial` reportan lo ya ejecutado. Si termina bien, el
+respaldo se elimina. Requieren que el directorio del sitio exista, que `/var/backups` exista
+y que `koha-remove` esté instalado. Use `--check` para revisar el plan antes.
 
 ```yaml
 - name: Reconfigurar biblioteca manteniendo su base de datos

@@ -1,32 +1,20 @@
 # SPDX-License-Identifier: MIT-0
-"""Helpers for the instance module."""
+"""Parameter validation and koha-create configuration helpers for the instance module."""
 
-import os
 import re
 import shlex
-import grp
-import pwd
-import json
 
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
 DB_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DB_PASSWORD_RE = re.compile(r"^[\x21-\x7e]{1,128}$")
 DB_PASSWORD_UNSAFE = ":'&\\<>/"
+DB_USER_RE = re.compile(r"^[A-Za-z0-9_]{1,32}$")
 SAFE_SHELL_VALUE_RE = re.compile(r"^[^\x00\r\n]*$")
 
 
 class ModuleInputError(ValueError):
     pass
-
-
-def normalize_marcflavor(value):
-    """Normalize MARC flavor names for Koha's lowercase CLI values."""
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise TypeError("marcflavor debe ser texto")
-    return choice_normalizer(["marc21", "unimarc"])(value)
 
 
 def choice_normalizer(choices):
@@ -51,74 +39,32 @@ def db_password_is_safe(value):
             and not any(char in value for char in DB_PASSWORD_UNSAFE))
 
 
-def ensure_mariadb_timezone(module, timezone, dbhost):
-    """Load local MariaDB timezone tables when a named Koha timezone is missing."""
-    if not timezone or timezone == "SYSTEM" or re.fullmatch(r"[+-]\d{2}:\d{2}", timezone):
-        return False
-    if not re.fullmatch(r"[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*", timezone):
-        raise ModuleInputError("timezone debe ser SYSTEM, un offset ±HH:MM o un identificador IANA válido")
-    host = (dbhost or "localhost").strip().lower()
-    if host not in ("localhost", "127.0.0.1", "::1", "[::1]"):
-        raise ModuleInputError("timezone %s requiere tablas MariaDB en la base remota %s; la carga automática requiere una DB local accesible por socket" % (timezone, dbhost))
+def _validate_vhosts(vhosts):
+    if not re.fullmatch(r"\.?[A-Za-z0-9.-]+", vhosts.get("domain") or ""):
+        raise ModuleInputError("vhosts.domain es obligatorio y solo admite sufijo DNS opcional con punto inicial")
+    for key in ("opac_prefix", "opac_suffix", "staff_prefix", "staff_suffix"):
+        if vhosts.get(key) and not re.fullmatch(r"[A-Za-z0-9-]*", vhosts[key]):
+            raise ModuleInputError("vhosts.%s solo admite caracteres DNS seguros" % key)
+    for key in ("opac_port", "staff_port"):
+        if vhosts.get(key) is not None and not 1 <= vhosts[key] <= 65535:
+            raise ModuleInputError("vhosts.%s debe estar entre 1 y 65535" % key)
 
-    zoneinfo_root = os.path.realpath("/usr/share/zoneinfo")
-    zone_file = os.path.realpath(os.path.join(zoneinfo_root, timezone))
-    if not zone_file.startswith(zoneinfo_root + os.sep) or not os.path.isfile(zone_file):
-        raise ModuleInputError("timezone %s no existe en %s" % (timezone, zoneinfo_root))
 
-    client = module.get_bin_path("mariadb", required=False) or module.get_bin_path("mysql", required=False)
-    if not client:
-        raise ModuleInputError("no se encontró mariadb/mysql para comprobar las tablas de zonas horarias")
-
-    query = "SELECT CONVERT_TZ('2025-01-15 12:00:00','+00:00','%s') IS NOT NULL" % timezone
-    query_argv = [client, "--protocol=socket", "--batch", "--skip-column-names", "--execute", query, "mysql"]
-    rc, stdout, _stderr = module.run_command(query_argv, check_rc=False)
-    if rc != 0:
-        raise ModuleInputError("no se pudo consultar MariaDB local como root para verificar las tablas de zonas horarias")
-    if stdout.strip() == "1":
-        return False
-    if stdout.strip() != "0":
-        raise ModuleInputError("MariaDB devolvió una respuesta inesperada al comprobar la zona horaria")
-
-    tzinfo = module.get_bin_path("mariadb-tzinfo-to-sql", required=False) or module.get_bin_path("mysql_tzinfo_to_sql", required=False)
-    if not tzinfo:
-        raise ModuleInputError("no se encontró mariadb-tzinfo-to-sql/mysql_tzinfo_to_sql para cargar zonas horarias")
-    rc, sql, _stderr = module.run_command([tzinfo, zoneinfo_root], check_rc=False)
-    if rc != 0 or not sql:
-        raise ModuleInputError("no se pudo generar la carga de zonas horarias desde %s" % zoneinfo_root)
-    rc, _stdout, _stderr = module.run_command([client, "--protocol=socket", "mysql"], data=sql, check_rc=False)
-    if rc != 0:
-        raise ModuleInputError("MariaDB rechazó la carga automática de sus tablas de zonas horarias")
-
-    systemctl = module.get_bin_path("systemctl", required=False)
-    service = module.get_bin_path("service", required=False)
-    if systemctl:
-        rc, _stdout, _stderr = module.run_command([systemctl, "restart", "mariadb"], check_rc=False)
-    elif service:
-        rc, _stdout, _stderr = module.run_command([service, "mariadb", "restart"], check_rc=False)
-    else:
-        raise ModuleInputError("se cargaron zonas horarias pero no se encontró systemctl/service para reiniciar MariaDB y activarlas")
-    if rc != 0:
-        raise ModuleInputError("se cargaron las zonas horarias, pero no se pudo reiniciar MariaDB para activarlas")
-
-    rc, stdout, _stderr = module.run_command(query_argv, check_rc=False)
-    if rc != 0 or stdout.strip() != "1":
-        raise ModuleInputError("las tablas de zonas horarias se cargaron, pero MariaDB no reconoce %s tras reiniciarse" % timezone)
-    return True
+def _validate_db_credentials(credentials):
+    username, password = credentials["username"], credentials["password"]
+    if not DB_USER_RE.fullmatch(username) or not db_password_is_safe(password):
+        raise ModuleInputError(
+            "db_credentials requiere username [A-Za-z0-9_]{1,32}; password de 1-128 caracteres ASCII imprimibles "
+            "sin espacios. Por seguridad de koha-create no se admiten : ' & / \\ < >")
 
 
 def validate_params(p):
-    instance = p.get("instance", p.get("name"))
-    confirmed_instance = p.get("confirm_instance", p.get("confirm_name"))
-    if p.get("marcflavor") is not None:
-        p["marcflavor"] = normalize_marcflavor(p["marcflavor"])
+    """Validate a parameter set once; enum choices are enforced by the argument spec."""
+    instance = p["instance"]
+    mode = p["db_mode"]
+    destructive = p.get("repair") or p.get("reconfigure")
     if not NAME_RE.fullmatch(instance or ""):
         raise ModuleInputError("instance debe tener 1-11 caracteres: minúsculas, números o guion; debe comenzar por letra")
-    if p["state"] not in ("present", "absent"):
-        raise ModuleInputError("state debe ser present o absent")
-    mode = p["db_mode"]
-    if mode not in ("create", "request", "populate", "use"):
-        raise ModuleInputError("db_mode debe ser create, request, populate o use")
     if p.get("database") and (len(p["database"]) > 64 or not DB_RE.fullmatch(p["database"])):
         raise ModuleInputError("database debe contener hasta 64 letras, números o guiones bajos")
     if mode == "use" and not (p.get("database") or p.get("db_credentials") or p.get("passwdfile")):
@@ -139,37 +85,27 @@ def validate_params(p):
         raise ModuleInputError("remove_database y purge_data solo se aplican con state=absent")
     if p.get("repair") and p.get("reconfigure"):
         raise ModuleInputError("repair y reconfigure son excluyentes")
-    if (p.get("repair") or p.get("reconfigure")) and p["state"] != "present":
-        raise ModuleInputError("repair y reconfigure solo son válidos con state=present")
-    if (p.get("repair") or p.get("reconfigure")) and mode not in ("create", "use"):
+    if (destructive or p.get("adopt")) and p["state"] != "present":
+        raise ModuleInputError("repair, reconfigure y adopt solo son válidos con state=present")
+    if p.get("adopt") and (destructive or mode not in ("create", "use")):
+        raise ModuleInputError("adopt no se combina con repair/reconfigure ni con db_mode=request/populate")
+    if destructive and mode not in ("create", "use"):
         raise ModuleInputError("repair/reconfigure no admiten db_mode=request ni populate; la DB existente se reutiliza con --use-db")
-    if (p.get("repair") or p.get("reconfigure")) and p.get("defaultsql"):
+    if destructive and p.get("defaultsql"):
         raise ModuleInputError("repair/reconfigure no admiten defaultsql; --use-db conserva la DB existente y no importa SQL")
-    if (p.get("repair") or p.get("reconfigure")) and (confirmed_instance != instance or not p.get("confirm_data_loss")):
+    if destructive and (p.get("confirm_instance") != instance or not p.get("confirm_data_loss")):
         raise ModuleInputError("repair/reconfigure requieren confirm_instance igual a instance y confirm_data_loss=true")
-    vhosts = p.get("vhosts") or {}
-    if vhosts:
-        if not re.fullmatch(r"\.?[A-Za-z0-9.-]+", vhosts.get("domain", "")):
-            raise ModuleInputError("vhosts.domain es obligatorio y solo admite sufijo DNS opcional con punto inicial")
-        for key in ("opac_prefix", "opac_suffix", "staff_prefix", "staff_suffix"):
-            if vhosts.get(key) and not re.fullmatch(r"[A-Za-z0-9-]*", vhosts[key]):
-                raise ModuleInputError("vhosts.%s solo admite caracteres DNS seguros" % key)
-        for key in ("opac_port", "staff_port"):
-            if vhosts.get(key) is not None and not 1 <= vhosts[key] <= 65535:
-                raise ModuleInputError("vhosts.%s debe estar entre 1 y 65535" % key)
-    if p.get("db_mode") == "request" and p.get("db_request_path") and not os.path.isabs(p["db_request_path"]):
+    if p.get("vhosts"):
+        _validate_vhosts(p["vhosts"])
+    if p.get("db_credentials"):
+        _validate_db_credentials(p["db_credentials"])
+    if mode == "request" and p.get("db_request_path") and not p["db_request_path"].startswith("/"):
         raise ModuleInputError("db_request_path debe ser una ruta absoluta del nodo remoto")
     if p.get("sru_port") is not None and not 1 <= p["sru_port"] <= 65535:
         raise ModuleInputError("sru_port debe estar entre 1 y 65535")
-    for group, fields in (("message_broker", ("port",)),):
-        for field in fields:
-            value = (p.get(group) or {}).get(field)
-            if value is not None and value < 1:
-                raise ModuleInputError("%s.%s debe ser un entero positivo" % (group, field))
-    if p.get("marcflavor") not in (None, "marc21", "unimarc"):
-        raise ModuleInputError("marcflavor debe ser marc21 o unimarc; koha-create no admite none en la versión de referencia")
-    if p.get("zebralang") not in (None, "cs", "el", "en", "es", "fr", "nb", "ru", "uk"):
-        raise ModuleInputError("zebralang no está admitido por la versión de referencia de koha-create")
+    port = (p.get("message_broker") or {}).get("port")
+    if port is not None and port < 1:
+        raise ModuleInputError("message_broker.port debe ser un entero positivo")
     if p.get("memcached_servers") and not all(re.fullmatch(r"[A-Za-z0-9_.:-]+", s) for s in p["memcached_servers"]):
         raise ModuleInputError("memcached_servers solo admite host:puerto con caracteres seguros")
     if p.get("memcached_prefix") and any(ch in p["memcached_prefix"] for ch in ("/", "&", "\\", "\r", "\n")):
@@ -186,13 +122,12 @@ def validate_params(p):
             raise ModuleInputError("%s contiene caracteres no seguros para la plantilla de koha-create" % key)
     if p.get("passwdfile") and re.search(r"\s", p["passwdfile"]):
         raise ModuleInputError("passwdfile no puede contener espacios; el script instalado expande esa ruta sin comillas")
-    for group, fields in (("message_broker", ("host", "username", "password", "vhost")),):
-        for field in fields:
-            value = (p.get(group) or {}).get(field)
-            # Upstream expands these variables into sed replacement strings.
-            # Refuse sed metacharacters that would alter generated Koha XML.
-            if value is not None and any(ch in str(value) for ch in ("/", "&", "\\", "\r", "\n")):
-                raise ModuleInputError("%s.%s contiene caracteres no soportados de forma segura por koha-create (/, &, backslash o salto de línea)" % (group, field))
+    for field in ("host", "username", "password", "vhost"):
+        value = (p.get("message_broker") or {}).get(field)
+        # Upstream expands these variables into sed replacement strings.
+        # Refuse sed metacharacters that would alter generated Koha XML.
+        if value is not None and any(ch in str(value) for ch in ("/", "&", "\\", "\r", "\n")):
+            raise ModuleInputError("message_broker.%s contiene caracteres no soportados de forma segura por koha-create (/, &, backslash o salto de línea)" % field)
 
 
 def shell_assignment(key, value):
@@ -271,39 +206,6 @@ def render_config(p, request_passwdfile=None):
         else:
             lines.append(shell_assignment(key, value))
     return "".join(lines)
-
-
-def inspect_state(name, marker_path, request_path):
-    paths = {
-        "config": "/etc/koha/sites/%s/koha-conf.xml" % name,
-        "apache": "/etc/apache2/sites-available/%s.conf" % name,
-        "apache_enabled": "/etc/apache2/sites-enabled/%s.conf" % name,
-        "site_dir": "/var/lib/koha/%s" % name,
-    }
-    found = {key: (os.path.lexists(path) if key == "apache_enabled" else os.path.exists(path)) for key, path in paths.items()}
-    for key, lookup, function in (("user", name + "-koha", pwd.getpwnam), ("group", name + "-koha", grp.getgrnam)):
-        try:
-            function(lookup)
-            found[key] = True
-        except KeyError:
-            found[key] = False
-    try:
-        with open(marker_path, "r", encoding="utf-8") as stream:
-            marker_text = stream.read().strip()
-            try:
-                marker = json.loads(marker_text)
-            except ValueError:
-                marker = {"state": marker_text}
-    except OSError:
-        marker = {}
-    if not any(found[key] for key in ("config", "apache", "apache_enabled", "user", "group")):
-        return "absent", found, marker
-    complete = all(found[key] for key in ("config", "apache", "site_dir", "user", "group"))
-    if complete and marker.get("state") == "requested" and os.path.isfile(request_path):
-        return "requested", found, marker
-    if complete and marker.get("state") == "present":
-        return "present", found, marker
-    return "partial", found, marker
 
 
 def build_argv(binary, mode, config_path, name):

@@ -1,0 +1,168 @@
+---
+# Each section recreates a failure mode found in the instance module audit.
+- name: Verify instance lifecycle
+  hosts: all
+  become: true
+  vars:
+    site_dir: "/etc/koha/sites/{{ koha_instance }}"
+    marker: "/var/lib/koha/{{ koha_instance }}/.ansible-koha-instance-state"
+    confirmations:
+      confirm_instance: "{{ koha_instance }}"
+      confirm_data_loss: true
+    base:
+      instance: "{{ koha_instance }}"
+      marcflavor: marc21
+      zebralang: en
+      vhosts:
+        domain: ".{{ koha_domain }}"
+        opac_suffix: -opac
+        staff_suffix: -staff
+  tasks:
+    - name: Marker is private, atomic JSON with the current schema
+      block:
+        - ansible.builtin.stat:
+            path: "{{ marker }}"
+          register: marker_stat
+        - ansible.builtin.slurp:
+            src: "{{ marker }}"
+          register: marker_raw
+        - ansible.builtin.assert:
+            that:
+              - marker_stat.stat.mode == '0600'
+              - (marker_raw.content | b64decode | from_json).schema_version == 2
+              - (marker_raw.content | b64decode | from_json).state == 'present'
+
+    - name: Check mode agrees with the real run
+      jmz.koha.instance:
+      args: "{{ base }}"
+      check_mode: true
+      register: noop_check
+    - ansible.builtin.assert:
+        that: not noop_check.changed
+
+    - name: Configuration drift is refused
+      jmz.koha.instance:
+      args: "{{ base | combine({'marcflavor': 'unimarc'}) }}"
+      register: drift
+      ignore_errors: true
+    - ansible.builtin.assert:
+        that:
+          - drift is failed
+          - "'drift' in drift.msg"
+
+    # --- adopt: an instance without a valid marker is never rebuilt implicitly
+    - name: Forget the marker
+      ansible.builtin.file:
+        path: "{{ marker }}"
+        state: absent
+    - name: Unmanaged instance without adopt is refused
+      jmz.koha.instance:
+      args: "{{ base }}"
+      register: unmanaged
+      ignore_errors: true
+    - ansible.builtin.assert:
+        that:
+          - unmanaged is failed
+          - "'adopt=true' in unmanaged.msg"
+    - name: Adopt registers the marker only
+      jmz.koha.instance:
+      args: "{{ base | combine({'adopt': true}) }}"
+      register: adopted
+    - name: Adopt twice
+      jmz.koha.instance:
+      args: "{{ base | combine({'adopt': true}) }}"
+      register: adopted_again
+    - name: A normal run is a noop again
+      jmz.koha.instance:
+      args: "{{ base }}"
+      register: after_adopt
+    - ansible.builtin.assert:
+        that:
+          - adopted.changed
+          - not adopted_again.changed
+          - not after_adopt.changed
+
+    # --- rebuild whose koha-create fails: configuration is restored and repairable
+    - name: Reconfigure with a koha-create that fails
+      jmz.koha.instance:
+      args: >-
+          {{ base | combine(confirmations) | combine({'reconfigure': true, 'koha_create_path': '/usr/local/bin/koha-create-failing',
+                                                       'vhosts': base.vhosts | combine({'staff_suffix': '-admin'})}) }}
+      register: failed_rebuild
+      ignore_errors: true
+    - name: Look for the leftovers
+      ansible.builtin.find:
+        paths: /var/backups
+        patterns: "ansible-koha-{{ koha_instance }}-*"
+        file_type: directory
+      register: backups
+    - ansible.builtin.stat:
+        path: "{{ site_dir }}/koha-conf.xml"
+      register: restored_conf
+    - ansible.builtin.command: "getent passwd {{ koha_instance }}-koha"
+      register: unix_user
+      failed_when: false
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - failed_rebuild is failed
+          - failed_rebuild.partial
+          - failed_rebuild.actions == ['koha-remove --keep-mysql', 'restaurar configuración previa']
+          - backups.matched == 1
+          - restored_conf.stat.exists
+          - unix_user.rc != 0
+    - name: Repair needs no credentials because koha-conf.xml was restored
+      jmz.koha.instance:
+      args: >-
+          {{ base | combine(confirmations) | combine({'repair': true, 'vhosts': base.vhosts | combine({'staff_suffix': '-admin'})}) }}
+      register: repaired
+    - ansible.builtin.command: "getent passwd {{ koha_instance }}-koha"
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - repaired.changed
+          - repaired.actions == ['koha-remove --keep-mysql', 'koha-create --use-db']
+    - name: Drop the failure backup
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ backups.files }}"
+
+    # --- absent on a partial instance that lost /etc/koha/sites/<instance>
+    - name: Lose the site directory
+      ansible.builtin.file:
+        path: "{{ site_dir }}"
+        state: absent
+    - name: Remove the partial instance
+      jmz.koha.instance:
+        instance: "{{ koha_instance }}"
+        state: absent
+        confirm_instance: "{{ koha_instance }}"
+        confirm_data_loss: true
+        purge_data: true
+        remove_database: true
+      register: removed
+    - ansible.builtin.command: "getent passwd {{ koha_instance }}-koha"
+      register: user_after
+      failed_when: false
+      changed_when: false
+    - ansible.builtin.stat:
+        path: "/etc/apache2/sites-available/{{ koha_instance }}.conf"
+      register: apache_after
+    - ansible.builtin.stat:
+        path: "{{ site_dir }}"
+      register: site_after
+    - ansible.builtin.assert:
+        that:
+          - removed.changed
+          - "'crear directorio de sitio vacío para koha-remove' in removed.actions"
+          - user_after.rc != 0
+          - not apache_after.stat.exists
+          - not site_after.stat.exists
+    - name: Removing it again is a noop
+      jmz.koha.instance:
+        instance: "{{ koha_instance }}"
+        state: absent
+      register: removed_again
+    - ansible.builtin.assert:
+        that: not removed_again.changed

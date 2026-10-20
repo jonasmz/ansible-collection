@@ -12,6 +12,7 @@ del módulo antes de validarse. Los textos libres conservan su contenido.
 | Módulo | Descripción | Referencia | Ejemplos |
 | --- | --- | --- | --- |
 | [`jmz.koha.instance`](instance/README.md) | Crear y administrar declarativamente una instancia Koha. | [Guía del módulo](instance/README.md) | [Escenarios](instance/examples.md) |
+| [`jmz.koha.mariadb_timezone`](mariadb_timezone/README.md) | Cargar las tablas de zonas horarias de un MariaDB local. | [Guía del módulo](mariadb_timezone/README.md) | [Escenarios](mariadb_timezone/examples.md) |
 | [`jmz.koha.plack`](plack/README.md) | Administrar el daemon Plack y su habilitación para una instancia. | [Guía del módulo](plack/README.md) | [Escenarios](plack/examples.md) |
 | [`jmz.koha.initialize`](initialize/README.md) | Inicializar datos de Koha y completar el onboarding inicial. | [Guía del módulo](initialize/README.md) | [Escenarios](initialize/examples.md) |
 | [`jmz.koha.localization`](localization/README.md) | Configurar idiomas y selectores OPAC/Staff. | [Guía del módulo](localization/README.md) | [Escenarios](localization/examples.md) |

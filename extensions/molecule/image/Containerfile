@@ -1,0 +1,19 @@
+# Ubuntu 24.04 + systemd with Koha, MariaDB and Apache (mpm_itk) preinstalled.
+# Build once with build.sh; the molecule scenarios start from this image.
+FROM docker.io/geerlingguy/docker-ubuntu2404-ansible:latest
+ARG KOHA_RELEASE=26.05
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Package scripts must not try to start services while the image is built.
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && install -d /etc/apt/keyrings \
+ && curl -fsSL https://debian.koha-community.org/koha/gpg.asc -o /etc/apt/keyrings/koha.asc \
+ && echo "deb [signed-by=/etc/apt/keyrings/koha.asc] http://debian.koha-community.org/koha ${KOHA_RELEASE} main" > /etc/apt/sources.list.d/koha.list \
+ && apt-get update \
+ && apt-get install -y mariadb-server apache2 libapache2-mpm-itk koha-common \
+ && a2enmod mpm_itk rewrite cgi \
+ && rm -f /usr/sbin/policy-rc.d \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
