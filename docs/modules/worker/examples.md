@@ -1,112 +1,57 @@
 # `jmz.koha.worker`: escenarios de uso
 
 [Guía del módulo](README.md) · [Índice de módulos](../README.md) ·
-[Guía general](../../README.md)
+[Guía general](../../README.md) · [README de la colección](../../../README.md)
 
-Use `become: true` para cambiar el estado operativo o la habilitación de workers.
+Use `become: true` en los escenarios que modifican procesos.
 
-## Iniciar una cola
-
-```yaml
-- name: Iniciar el worker general
-  jmz.koha.worker:
-    instance: biblioteca
-    state: started
-    queue: default
-  become: true
-```
-
-Para tareas de larga duración, use `queue: long_tasks`. Ambos estados son
-idempotentes; si el worker ya coincide con lo solicitado, Koha no recibe una
-operación de inicio o detención.
-
-## Asegurar ambas colas y su inicio automático
+## Ambas colas en marcha
 
 ```yaml
-- name: Mantener workers activos y habilitados
+- name: Workers en marcha
   jmz.koha.worker:
     instance: biblioteca
-    state: started
     queue: all
-    enabled: true
+    state: started
   become: true
 ```
 
-La habilitación persistente no arranca procesos por sí sola. El ejemplo pide
-explícitamente ambas propiedades.
-
-## Reiniciar workers
+## Una sola cola
 
 ```yaml
-- name: Reiniciar todas las colas
+- name: Reiniciar el worker general
   jmz.koha.worker:
     instance: biblioteca
     state: restarted
-    queue: all
   become: true
-```
 
-El reinicio es una operación explícita y reporta `changed: true` cuando
-finaliza correctamente.
-
-## Consultar estado
-
-```yaml
-- name: Consultar ambas colas
+- name: Detener la cola de tareas largas
   jmz.koha.worker:
     instance: biblioteca
-    state: status
-    queue: all
-  register: worker_status
-
-- name: Mostrar estado de cada cola
-  ansible.builtin.debug:
-    var: worker_status.workers
-```
-
-La consulta no modifica servicios. No combine `state: status` con `enabled`.
-
-## Detener y deshabilitar
-
-```yaml
-- name: Detener workers y deshabilitar el inicio automático
-  jmz.koha.worker:
-    instance: biblioteca
+    queue: long_tasks
     state: stopped
-    queue: all
-    enabled: false
   become: true
 ```
 
-## Administrar varias instancias
+## Consultar
 
 ```yaml
-- name: Asegurar workers de las bibliotecas
-  jmz.koha.worker:
-    instance: "{{ item }}"
-    state: started
-    queue: all
-  loop:
-    - biblioteca_central
-    - biblioteca_norte
-    - biblioteca_sur
-  become: true
-```
-
-Cada iteración consulta y administra exclusivamente la instancia indicada.
-
-## Check mode
-
-```yaml
-- name: Revisar cambios previstos
+- name: Estado de los workers
   jmz.koha.worker:
     instance: biblioteca
-    state: started
     queue: all
-    enabled: true
-  become: true
-  check_mode: true
+  register: workers
+- ansible.builtin.debug:
+    msg: "{{ workers.workers }}"
 ```
 
-El módulo devuelve `changed: true` si hay acciones pendientes, pero no inicia,
-detiene, reinicia ni habilita unidades.
+## Previsualizar
+
+```yaml
+- jmz.koha.worker:
+    instance: biblioteca
+    queue: all
+    state: stopped
+  check_mode: true
+  become: true
+```

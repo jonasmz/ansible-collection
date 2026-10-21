@@ -1,96 +1,95 @@
-# `jmz.koha.zebra_rebuild` examples
+# `jmz.koha.zebra_rebuild`: escenarios de uso
 
-[Module guide](README.md) · [Module index](../README.md)
+[Guía del módulo](README.md) · [Índice de módulos](../README.md) ·
+[Guía general](../../README.md) · [README de la colección](../../../README.md)
 
-All examples run on the managed Koha host and require `become: true`.
+Use `become: true`: la utilidad exige privilegios de root.
 
-## Initial full indexing
-
-Start Zebra with its lifecycle module, then request a full rebuild explicitly.
-Start the incremental indexer only after the initial rebuild completes:
+## Reconstrucción completa inicial
 
 ```yaml
-- name: Start Zebra for biblioteca
-  jmz.koha.zebra:
-    instance: biblioteca
-    state: started
+- name: Zebra en marcha
+  jmz.koha.zebra: {instance: biblioteca, state: started}
   become: true
 
-- name: Build bibliographic and authority indexes
+- name: Reconstrucción completa
   jmz.koha.zebra_rebuild:
     instance: biblioteca
     mode: full
-    target: all
     require_zebra_running: true
   become: true
-
-- name: Start the incremental indexer
-  jmz.koha.zebra_indexer:
-    instance: biblioteca
-    state: started
-  become: true
+  async: 7200
+  poll: 30
 ```
 
-## Separate index types
+## Reconstrucción completa silenciosa
 
 ```yaml
-- name: Update bibliographic indexes
-  jmz.koha.zebra_rebuild:
-    instance: biblioteca
-    mode: incremental
-    target: biblios
-  become: true
-
-- name: Rebuild authority indexes completely
-  jmz.koha.zebra_rebuild:
+- jmz.koha.zebra_rebuild:
     instance: biblioteca
     mode: full
-    target: authorities
-    verbose: 2
+    quiet: true
+    verbose: 0
   become: true
 ```
 
-## Daemon coordination
+La tarea termina en `ok` aunque la utilidad no imprima nada.
 
-When the global Koha setting `USE_INDEXER_DAEMON` enables the permanent
-indexer, Koha skips a normal incremental `koha-rebuild-zebra` request. The
-module reports `status: skipped` and `changed: false`. If a one-off incremental
-pass is required, coordinate it with the service owner, then explicitly set
-`force: true`. Koha's own lock remains in force:
+## Actualización incremental
 
 ```yaml
-- name: Run a coordinated one-off incremental pass
+- name: Solo los registros bibliográficos pendientes
   jmz.koha.zebra_rebuild:
     instance: biblioteca
-    target: all
+    target: biblios
+  become: true
+  register: rebuild
+
+- ansible.builtin.debug:
+    msg: "{{ rebuild.skip_reason }}"
+  when: rebuild.work_skipped
+```
+
+Con el indexador activo (`USE_INDEXER_DAEMON=yes`) no se ejecuta nada, `work_skipped` es verdadero y
+la tarea **no falla** ni aparece como `SKIPPED`. Para forzarlo:
+
+```yaml
+- jmz.koha.zebra_rebuild:
+    instance: biblioteca
+    target: authorities
     force: true
   become: true
 ```
 
-The task does not stop `koha-indexer` or serialize separate playbook runs.
-Use the lifecycle module and the playbook's orchestration to coordinate work.
-
-## Long-running operations and check mode
+## Parar el indexador mientras se reconstruye
 
 ```yaml
-- name: Run a full rebuild with Ansible async polling
-  jmz.koha.zebra_rebuild:
-    instance: biblioteca
-    mode: full
-  async: 7200
-  poll: 30
+- jmz.koha.zebra_indexer: {instance: biblioteca, state: stopped}
   become: true
+- jmz.koha.zebra_rebuild: {instance: biblioteca, mode: full}
+  become: true
+- jmz.koha.zebra_indexer: {instance: biblioteca, state: started}
+  become: true
+```
 
-- name: Review preflight and planned argv without rebuilding
-  jmz.koha.zebra_rebuild:
+## Previsualizar
+
+```yaml
+- jmz.koha.zebra_rebuild:
     instance: biblioteca
     mode: full
-    target: all
   check_mode: true
   become: true
 ```
 
-An async task must be polled until its job completes before another rebuild is
-submitted for that instance. Check mode still verifies the installation,
-options, search engine, and requested service preconditions, but does not
-inspect pending records.
+Valida todo lo de solo lectura y devuelve el comando previsto en `command`, con `executed: false`.
+
+## Varias instancias
+
+```yaml
+- jmz.koha.zebra_rebuild:
+    instance: "{{ item }}"
+    mode: full
+  loop: [biblioteca, archivo]
+  become: true
+```

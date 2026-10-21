@@ -12,11 +12,12 @@ del módulo antes de validarse. Los textos libres conservan su contenido.
 | Módulo | Descripción | Referencia | Ejemplos |
 | --- | --- | --- | --- |
 | [`jmz.koha.instance`](instance/README.md) | Crear y administrar declarativamente una instancia Koha. | [Guía del módulo](instance/README.md) | [Escenarios](instance/examples.md) |
-| [`jmz.koha.plack`](plack/README.md) | Administrar el daemon Plack y su habilitación para una instancia. | [Guía del módulo](plack/README.md) | [Escenarios](plack/examples.md) |
+| [`jmz.koha.mariadb_timezone`](mariadb_timezone/README.md) | Cargar las tablas de zonas horarias de un MariaDB local. | [Guía del módulo](mariadb_timezone/README.md) | [Escenarios](mariadb_timezone/examples.md) |
+| [`jmz.koha.plack`](plack/README.md) | Administrar el daemon Plack y su activación en Apache para una instancia. | [Guía del módulo](plack/README.md) | [Escenarios](plack/examples.md) |
 | [`jmz.koha.initialize`](initialize/README.md) | Inicializar datos de Koha y completar el onboarding inicial. | [Guía del módulo](initialize/README.md) | [Escenarios](initialize/examples.md) |
 | [`jmz.koha.localization`](localization/README.md) | Configurar idiomas y selectores OPAC/Staff. | [Guía del módulo](localization/README.md) | [Escenarios](localization/examples.md) |
-| [`jmz.koha.smtp`](smtp/README.md) | Configurar transporte SMTP, habilitación de correo y correo administrativo. | [Guía del módulo](smtp/README.md) | [Escenarios](smtp/examples.md) |
-| [`jmz.koha.worker`](worker/README.md) | Administrar workers de background jobs y su habilitación. | [Guía del módulo](worker/README.md) | [Escenarios](worker/examples.md) |
+| [`jmz.koha.smtp`](smtp/README.md) | Agregar un servidor SMTP y establecerlo como predeterminado. | [Guía del módulo](smtp/README.md) | [Escenarios](smtp/examples.md) |
+| [`jmz.koha.worker`](worker/README.md) | Administrar workers de background jobs. | [Guía del módulo](worker/README.md) | [Escenarios](worker/examples.md) |
 | [`jmz.koha.zebra`](zebra/README.md) | Administrar el servicio Zebra de una instancia. | [Guía del módulo](zebra/README.md) | [Escenarios](zebra/examples.md) |
 | [`jmz.koha.zebra_indexer`](zebra_indexer/README.md) | Administrar el daemon de indexación incremental Zebra de una instancia. | [Guía del módulo](zebra_indexer/README.md) | [Escenarios](zebra_indexer/examples.md) |
 | [`jmz.koha.zebra_rebuild`](zebra_rebuild/README.md) | Ejecutar actualizaciones incrementales y reconstrucciones puntuales de los índices Zebra. | [Guía del módulo](zebra_rebuild/README.md) | [Escenarios](zebra_rebuild/examples.md) |

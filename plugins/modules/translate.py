@@ -5,79 +5,74 @@
 DOCUMENTATION = r'''
 ---
 module: translate
-short_description: Manage Koha translations declaratively
+short_description: Administra de forma declarativa las traducciones de Koha
 description:
-  - Ensures a translation is installed or absent using the official koha-translate command.
-  - The default Debian scope is the shared Koha installation, not an individual library instance.
-version_added: "1.4.0"
+  - Asegura que una traducción esté instalada o ausente mediante el comando oficial koha-translate.
+  - El alcance en Debian es el árbol compartido de Koha, no una biblioteca individual.
+  - No activa los idiomas en la interfaz; para eso use M(jmz.koha.localization).
+version_added: "1.3.0"
 author: Jonas MZ
 requirements:
-  - Debian or Ubuntu Koha package providing koha-translate, Koha helper files, and translation resources (normally koha-l10n).
-  - Root privileges; use become: true.
+  - Koha empaquetado para Debian o Ubuntu con koha-translate, sus archivos auxiliares y los recursos de traducción (normalmente koha-l10n).
+  - "Privilegios de root (use become: true)."
 options:
   name:
-    description: Exact Koha language code, for example es-ES or fr-CA.
+    description: Código de idioma exacto de Koha, por ejemplo es-ES o fr-CA.
     type: str
     required: true
-    aliases: [language, lang_code]
   state:
-    description: Whether the translation should be installed or absent.
+    description: Si la traducción debe estar instalada o ausente.
     type: str
     choices: [present, absent]
     default: present
   update:
-    description: Explicitly regenerate an installed translation. Koha removes it before reinstalling it, so a failure can leave it absent.
+    description: Regenera explícitamente una traducción instalada. Koha la elimina antes de reinstalarla, por lo que un fallo puede dejarla ausente.
     type: bool
     default: false
-  dev_instance:
-    description: Existing Koha instance configured with git_install or legacy dev_install. Selects that development checkout only; production instances are rejected.
-    type: str
   verbose:
-    description: Ask koha-translate for detailed output. Its four-argument limit prevents combining this with dev_instance.
+    description: Pide a koha-translate una salida detallada.
     type: bool
     default: false
+  timeout:
+    description: Segundos que puede ejecutarse cada llamada a koha-translate antes de ser terminada; una mutación que excede el límite se informa como parcial.
+    type: int
+    default: 600
 notes:
-  - Without dev_instance, translations are generated in the shared Debian Koha tree, not privately for one production instance. Install and remove clear caches for enabled instances globally.
-  - dev_instance requires an existing Koha config marked as a Git/development install. The module never falls back to global scope.
-  - available checks only for an OPAC PO file. Before install/update, the module also runs --check for required MARC21, UNIMARC, OPAC, preference, and staff PO files; neither check proves runtime functionality.
-  - Koha update removes then reinstalls and is not atomic. Required PO files are checked first and the resulting installed list is verified; rollback is not promised.
-  - Koha 26.05.x install and remove clear cache; update does not call the cache helper. This module adds no extra cache operation.
-  - Installing templates does not enable OPACLanguages or StaffInterfaceLanguages, configure user languages, or change the database.
-  - Modifications are coordinated with a local flock under /run/lock. External koha-translate invocations do not use this lock.
-  - update=true can report changed on every run; Koha exposes no reliable translation-source version check.
-  - English en is built in and cannot be installed, updated, or removed.
-  - Designed against Koha 26.05.x and the matching current upstream interface. Validate the installed package before relying on another branch.
-  - Check mode performs read-only queries and reports the planned action. Diff mode reports semantic installed state, not generated PO/template file contents.
+  - Las traducciones se generan en el árbol compartido de Koha, no de forma privada para una instancia. Instalar y quitar limpian las cachés de las instancias habilitadas de manera global.
+  - Los checkouts Git o de desarrollo de Koha (koha-translate --dev) no están soportados.
+  - available solo comprueba un archivo PO de OPAC. Antes de instalar o actualizar, el módulo también ejecuta --check para los PO requeridos de MARC21, UNIMARC, OPAC, preferencias y personal; ninguna de las dos comprobaciones demuestra el funcionamiento en ejecución.
+  - La actualización de Koha elimina y reinstala, y no es atómica. Primero se comprueban los PO requeridos y se verifica la lista de idiomas instalados al final; no se promete rollback.
+  - En Koha 26.05.x install y remove limpian la caché; update no llama al ayudante de caché. Este módulo no agrega ninguna operación de caché.
+  - Instalar plantillas no habilita OPACLanguages ni StaffInterfaceLanguages, no configura idiomas de usuario ni cambia la base de datos.
+  - Las modificaciones se coordinan con un flock local bajo /run/lock. Las invocaciones externas de koha-translate no usan este lock.
+  - La salida de koha-translate se devuelve con los bytes UTF-8 inválidos reemplazados, de modo que un comando que imprime texto no UTF-8 (fr-FR lo hace) ya no rompe el resultado.
+  - update=true puede informar changed en cada ejecución; Koha no expone una comprobación fiable de la versión de las fuentes de traducción.
+  - El inglés (en) está integrado y no puede instalarse, actualizarse ni quitarse.
+  - Diseñado contra Koha 26.05.x y la interfaz upstream equivalente; valide el paquete instalado antes de usar otra rama.
+  - El modo de comprobación hace solo consultas de lectura e informa la acción prevista. El modo diff muestra el estado semántico instalado, no el contenido de los PO o plantillas generados.
 '''
 
 EXAMPLES = r'''
-- name: Install Spanish translation in the shared Koha tree
+- name: Instalar la traducción al español en el árbol compartido de Koha
   jmz.koha.translate:
     name: es-ES
     state: present
   become: true
 
-- name: Ensure French translation is absent
+- name: Asegurar que la traducción al francés esté ausente
   jmz.koha.translate:
     name: fr-FR
     state: absent
   become: true
 
-- name: Explicitly regenerate Spanish translation templates
+- name: Regenerar explícitamente las plantillas en español
   jmz.koha.translate:
     name: es-ES
     state: present
     update: true
   become: true
 
-- name: Install Spanish templates in a development checkout
-  jmz.koha.translate:
-    name: es-ES
-    state: present
-    dev_instance: koha-dev
-  become: true
-
-- name: Preview an installation
+- name: Previsualizar una instalación
   jmz.koha.translate:
     name: es-ES
     state: present
@@ -88,154 +83,150 @@ EXAMPLES = r'''
 
 RETURN = r'''
 name:
-  description: Exact language code requested.
+  description: Código de idioma pedido.
   returned: always
   type: str
 state:
-  description: Requested declarative state.
+  description: Estado declarativo pedido.
   returned: always
   type: str
 installed:
-  description: Whether the exact code is installed at the end; en is treated as built in.
+  description: Si el código exacto está instalado al final; en se trata como integrado.
   returned: always
   type: bool
 available:
-  description: Whether Koha listed the exact code as available, or null when it was not queried.
+  description: Si Koha listó el código exacto como disponible, o nulo si no se consultó.
   returned: always
   type: bool
 action_executed:
-  description: Mutation actually executed, or null when none occurred.
+  description: Mutación realmente ejecutada, o nulo si no hubo ninguna.
   returned: always
   type: str
 planned_action:
-  description: Mutation predicted in check mode, or null when no change is needed.
+  description: Mutación prevista en check mode, o nulo si no hace falta cambio.
   returned: when check mode
   type: str
-scope:
-  description: global or development.
-  returned: always
-  type: str
-dev_instance:
-  description: Selected development instance, or null for global scope.
-  returned: always
-  type: str
+partial:
+  description: Una mutación falló o fue terminada y las plantillas pueden haber quedado a medias.
+  returned: when failed after a mutation
+  type: bool
 cmd:
-  description: Safe argv list for the last command or planned mutation.
+  description: Lista argv segura del último comando o de la mutación prevista.
   returned: always
   type: list
   elements: str
 rc:
-  description: Return code of the last command, or null when none ran.
+  description: Código de retorno del último comando, o nulo si no se ejecutó ninguno.
   returned: always
   type: int
 stdout:
-  description: Bounded stdout from the last command.
+  description: Salida estándar acotada del último comando.
   returned: always
   type: str
 stderr:
-  description: Bounded stderr from the last command.
+  description: Salida de error acotada del último comando.
   returned: always
   type: str
 msg:
-  description: Human-readable outcome or planned operation.
+  description: Resultado legible o la operación prevista.
   returned: always
   type: str
 '''
 
 import contextlib
-import fcntl
-import hashlib
 import os
 import re
-import time
-import xml.etree.ElementTree as ET
+import signal
+import subprocess
 
 from ansible.module_utils.basic import AnsibleModule
-from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import ModuleInputError, choice_normalizer
+from ansible_collections.jmz.koha.plugins.module_utils.koha_lock import exclusive_lock
 
 
 LANGUAGE_RE = re.compile(r"^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$")
-INSTANCE_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
 OUTPUT_LIMIT = 6000
 LOCK_TIMEOUT = 30
-REQUIRED_HELP_OPTIONS = ("--list", "--available", "--check", "--install", "--update", "--remove", "--dev")
+REQUIRED_HELP_OPTIONS = ("--list", "--available", "--check", "--install", "--update", "--remove")
+OBSERVE_TIMEOUT = 60
 
 
 class TranslateError(Exception):
     """A safe validation, command, or verification error."""
 
-    def __init__(self, message, result=None):
+    def __init__(self, message, result=None, timed_out=False):
         super().__init__(message)
         self.result = result
+        self.timed_out = timed_out
+
+
+class CommandTimeout(Exception):
+    """A command was killed after running past its time limit."""
+
+    def __init__(self, stdout, stderr):
+        super().__init__("command timed out")
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _clean(value):
+    """Return text that can always be serialized: invalid UTF-8 bytes become replacement characters."""
+    return (value or "").encode("utf-8", "replace").decode("utf-8")
 
 
 def _bounded(value):
     """Limit command output included in a module result."""
-    return (value or "")[:OUTPUT_LIMIT]
+    return _clean(value)[:OUTPUT_LIMIT]
 
 
 def validate_language(value):
     """Accept common Koha language identifiers and reject paths/options."""
     if not isinstance(value, str) or not LANGUAGE_RE.fullmatch(value):
-        raise TranslateError("name must be a language code such as es-ES (letters and digits separated by hyphens)")
+        raise TranslateError("name debe ser un código de idioma como es-ES (letras y dígitos separados por guiones)")
     return value
 
 
-def validate_instance(value):
-    """Validate the instance syntax accepted by Koha Debian helpers."""
-    if not isinstance(value, str) or not INSTANCE_RE.fullmatch(value):
-        raise TranslateError("dev_instance must be a valid Koha instance name (1-11 lowercase letters, digits, or hyphens; starting with a letter)")
-    return value
-
-
-def _development_tree(instance):
-    """Return the checkout root for an existing Koha Git/development instance."""
-    config = "/etc/koha/sites/%s/koha-conf.xml" % instance
-    if not os.path.isfile(config):
-        raise TranslateError("development instance %s does not exist: %s was not found" % (instance, config))
+def _run(argv, timeout):
+    """Run argv with a stable locale and return (rc, stdout, stderr); kill its process group on timeout."""
+    environment = dict(os.environ, LANG="C", LC_ALL="C", LC_MESSAGES="C")
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               start_new_session=True, env=environment)
     try:
-        root = ET.parse(config).getroot()
-    except (ET.ParseError, OSError) as exc:
-        raise TranslateError("cannot read Koha configuration for development instance %s: %s" % (instance, exc))
-    value = root.findtext("git_install")
-    if value is None or not value.strip():
-        value = root.findtext("dev_install")
-    if value is None or not value.strip() or value.strip() == "0":
-        raise TranslateError("dev_instance %s is not configured as a development/Git Koha install (git_install/dev_install is not enabled)" % instance)
-    intranetdir = root.findtext("intranetdir")
-    if not intranetdir or not os.path.isabs(intranetdir.strip()) or not os.path.isdir(intranetdir.strip()):
-        raise TranslateError("development instance %s has no valid intranetdir checkout in %s" % (instance, config))
-    return os.path.realpath(intranetdir.strip())
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate()
+        raise CommandTimeout(stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace"))
+    return process.returncode, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
 
 
-def _command(module, argv, operation):
-    """Run argv through Ansible and normalize errors and captured output."""
+def _command(argv, operation, timeout):
+    """Run argv and normalize errors and captured output."""
     try:
-        rc, stdout, stderr = module.run_command(argv)
+        rc, stdout, stderr = _run(argv, timeout)
+    except CommandTimeout as exc:
+        result = {"cmd": argv, "rc": None, "stdout": _bounded(exc.stdout), "stderr": _bounded(exc.stderr)}
+        raise TranslateError("koha-translate %s excedió el límite de %s segundos" % (operation, timeout), result=result, timed_out=True)
     except OSError as exc:
-        raise TranslateError("could not run koha-translate for %s: %s" % (operation, exc))
+        raise TranslateError("no se pudo ejecutar koha-translate para %s: %s" % (operation, exc))
     result = {"cmd": argv, "rc": rc, "stdout": _bounded(stdout), "stderr": _bounded(stderr)}
     if rc != 0:
-        detail = (stderr or stdout or "no diagnostic output").strip()
-        raise TranslateError("koha-translate %s failed (rc=%s): %s" % (operation, rc, _bounded(detail)), result=result)
+        detail = (_clean(stderr) or _clean(stdout) or "sin salida de diagnóstico").strip()
+        raise TranslateError("koha-translate %s falló (rc=%s): %s" % (operation, rc, _bounded(detail)), result=result)
     return result
 
 
-def _scope_args(dev_instance):
-    """Return the native CLI suffix for the selected scope."""
-    return ["--dev", dev_instance] if dev_instance else []
-
-
-def _query_languages(module, binary, mode, dev_instance):
+def _query_languages(binary, mode, timeout):
     """Query and normalize exact installed or available language identifiers."""
     if mode == "installed":
-        argv = [binary, "--list"] + _scope_args(dev_instance)
+        argv = [binary, "--list"]
     elif mode == "available":
-        argv = [binary, "--list", "--available"] + _scope_args(dev_instance)
+        argv = [binary, "--list", "--available"]
     else:
-        raise TranslateError("unsupported language query: %s" % mode)
+        raise TranslateError("consulta de idiomas no admitida: %s" % mode)
     try:
-        result = _command(module, argv, "language list query")
+        result = _command(argv, "language list query", timeout)
     except TranslateError as exc:
         # Koha 26.05.x uses `set -e` and ends `--list` with grep -v. When
         # there are no non-English translations installed, grep finds no
@@ -253,81 +244,52 @@ def _query_languages(module, binary, mode, dev_instance):
         if not code:
             continue
         if not LANGUAGE_RE.fullmatch(code):
-            raise TranslateError("koha-translate returned unexpected %s output: %s" % (mode, _bounded(code)))
+            raise TranslateError("koha-translate devolvió una salida %s inesperada: %s" % (mode, _bounded(code)))
         if code not in seen:
             seen.add(code)
             languages.append(code)
     return languages, result
 
 
-def _check_po_files(module, binary, name, dev_instance):
+def _check_po_files(binary, name, timeout):
     """Ask Koha to check the PO files required by its translation script."""
-    argv = [binary, "--check", name] + _scope_args(dev_instance)
+    argv = [binary, "--check", name]
     try:
-        return _command(module, argv, "--check %s" % name)
+        return _command(argv, "--check %s" % name, timeout)
     except TranslateError as exc:
         message = str(exc)
         if "not found" in message.lower() or "no such file" in message.lower():
-            raise TranslateError("required PO files are incomplete for %s; install or repair translation resources (usually koha-l10n): %s" % (name, message))
+            raise TranslateError("faltan archivos PO requeridos para %s; instale o repare los recursos de traducción (normalmente koha-l10n): %s" % (name, message))
         raise
 
 
-def _verify_cli(module, binary, verbose):
+def _verify_cli(binary, timeout):
     """Require installed help output to advertise the interface used here."""
-    result = _command(module, [binary, "--help"], "--help compatibility check")
+    result = _command([binary, "--help"], "--help compatibility check", timeout)
     help_text = result["stdout"] + "\n" + result["stderr"]
     missing = [option for option in REQUIRED_HELP_OPTIONS if option not in help_text]
-    if verbose and "--verbose" not in help_text:
-        missing.append("--verbose")
     if missing:
-        raise TranslateError("installed koha-translate does not advertise required options: %s" % ", ".join(missing))
+        raise TranslateError("el koha-translate instalado no anuncia las opciones requeridas: %s" % ", ".join(missing))
     return result
 
 
-def _planned_argv(binary, action, name, dev_instance, verbose):
-    """Build native argv after validating the CLI argument limit."""
+def _planned_argv(binary, action, name, verbose):
+    """Build the native argv."""
     argv = [binary, "--" + action, name]
     if verbose:
         argv.append("--verbose")
-    argv.extend(_scope_args(dev_instance))
-    if len(argv) - 1 > 4:
-        raise TranslateError("this koha-translate version accepts at most four arguments; verbose cannot be combined with dev_instance")
     return argv
 
 
-def _lock_path(dev_instance, dev_root=None):
-    """Return a lock path for the actual shared or development resource."""
-    if dev_instance:
-        if not dev_root:
-            raise TranslateError("development checkout path is required to select its translation lock")
-        digest = hashlib.sha256(os.path.realpath(dev_root).encode("utf-8")).hexdigest()[:20]
-        return "/run/lock/jmz-koha-translate-dev-%s.lock" % digest
-    return "/run/lock/jmz-koha-translate-global.lock"
-
-
 @contextlib.contextmanager
-def _mutation_lock(path, timeout=LOCK_TIMEOUT):
-    """Acquire a bounded local flock and release it on every exit path."""
+def _mutation_lock(wait=LOCK_TIMEOUT):
+    """Serialize mutations of the shared translation tree; wait a bounded time for a busy lock."""
     try:
-        handle = open(path, "a", encoding="utf-8")
-    except OSError as exc:
-        raise TranslateError("cannot open translation lock %s: %s (run with become: true)" % (path, exc))
-    try:
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TranslateError("timed out waiting for translation lock %s; another module operation may be active" % path)
-                time.sleep(0.1)
-        yield
-    finally:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        finally:
-            handle.close()
+        with exclusive_lock("translate", "global",
+                            "se agotó la espera del lock de traducciones; otra operación del módulo puede estar activa", wait=wait):
+            yield
+    except ModuleInputError as exc:
+        raise TranslateError(str(exc))
 
 
 def _need_action(state, installed, update):
@@ -339,11 +301,10 @@ def _need_action(state, installed, update):
     return "install"
 
 
-def _payload(name, state, dev_instance, installed, available, last, action=None, planned=None, msg=""):
+def _payload(name, state, installed, available, last, action=None, planned=None, msg=""):
     """Prepare consistent safe JSON output fields."""
     return {
         "name": name, "state": state, "installed": installed, "available": available,
-        "scope": "development" if dev_instance else "global", "dev_instance": dev_instance,
         "action_executed": action, "planned_action": planned,
         "cmd": last.get("cmd", []) if last else [], "rc": last.get("rc") if last else None,
         "stdout": last.get("stdout", "") if last else "", "stderr": last.get("stderr", "") if last else "",
@@ -351,70 +312,77 @@ def _payload(name, state, dev_instance, installed, available, last, action=None,
     }
 
 
+def _observe_installed(binary, name):
+    """Best effort: whether ``name`` is installed after a failed mutation, or None when unknown."""
+    try:
+        codes, _ = _query_languages(binary, "installed", OBSERVE_TIMEOUT)
+    except (TranslateError, OSError):
+        return None
+    return name in codes
+
+
 def main():
     """Observe state, plan the minimum operation, and verify any mutation."""
     module = AnsibleModule(
         argument_spec=dict(
-            name=dict(type="str", required=True, aliases=["language", "lang_code"]),
+            name=dict(type="str", required=True),
             state=dict(type=choice_normalizer(["present", "absent"]), choices=["present", "absent"], default="present"),
             update=dict(type="bool", default=False),
-            dev_instance=dict(type="str"),
             verbose=dict(type="bool", default=False),
+            timeout=dict(type="int", default=600),
         ), supports_check_mode=True,
     )
     p = module.params
     name, state = p["name"], p["state"]
-    update, dev_instance, verbose = p["update"], p["dev_instance"], p["verbose"]
+    update, verbose, timeout = p["update"], p["verbose"], p["timeout"]
     last = None
     installed = None
     available = None
-    dev_root = None
 
     try:
         validate_language(name)
-        if dev_instance is not None:
-            validate_instance(dev_instance)
-            dev_root = _development_tree(dev_instance)
+        if timeout <= 0:
+            raise TranslateError("timeout debe ser positivo")
         if update and state != "present":
-            raise TranslateError("update: true is only valid with state: present")
-        if verbose and dev_instance:
-            raise TranslateError("verbose cannot be combined with dev_instance: koha-translate accepts at most four argv items")
+            raise TranslateError("update: true solo es válido con state: present")
         if name == "en" and state == "absent":
-            raise TranslateError("the built-in English language en cannot be removed")
+            raise TranslateError("el idioma inglés integrado (en) no se puede quitar")
         if name == "en" and update:
-            raise TranslateError("the built-in English language en cannot be updated")
+            raise TranslateError("el idioma inglés integrado (en) no se puede actualizar")
 
         binary = module.get_bin_path("koha-translate", required=False)
         if not binary or not os.path.isfile(binary) or not os.access(binary, os.X_OK):
-            raise TranslateError("koha-translate was not found or is not executable; install the Koha package providing it")
-        last = _verify_cli(module, binary, verbose)
+            raise TranslateError("no se encontró koha-translate o no es ejecutable; instale el paquete de Koha que lo proporciona")
+        last = _verify_cli(binary, timeout)
+        if verbose and "--verbose" not in (last["stdout"] + last["stderr"]):
+            raise TranslateError("installed koha-translate does not advertise required options: --verbose")
         if name == "en":
-            result = _payload(name, state, dev_instance, True, None, last, msg="English (en) is Koha's built-in base language")
+            result = _payload(name, state, True, None, last, msg="El inglés (en) es el idioma base integrado de Koha")
             if module._diff:
                 result["diff"] = {"before": {"installed": True}, "after": {"installed": True}}
             module.exit_json(changed=False, **result)
 
-        installed_codes, last = _query_languages(module, binary, "installed", dev_instance)
+        installed_codes, last = _query_languages(binary, "installed", timeout)
         installed = name in installed_codes
         action = _need_action(state, installed, update)
         if action in ("install", "update"):
-            available_codes, last = _query_languages(module, binary, "available", dev_instance)
+            available_codes, last = _query_languages(binary, "available", timeout)
             available = name in available_codes
             if not available:
-                raise TranslateError("language %s is not available in local translation resources; install or repair koha-l10n or the development PO checkout" % name)
-            last = _check_po_files(module, binary, name, dev_instance)
+                raise TranslateError("el idioma %s no está disponible en los recursos de traducción locales; instale o repare koha-l10n" % name)
+            last = _check_po_files(binary, name, timeout)
 
         if not action:
-            result = _payload(name, state, dev_instance, installed, available, last,
-                              msg="translation %s is already %s" % (name, "installed" if state == "present" else "absent"))
+            result = _payload(name, state, installed, available, last,
+                              msg="la traducción %s ya está %s" % (name, "instalada" if state == "present" else "ausente"))
             if module._diff:
                 result["diff"] = {"before": {"installed": installed}, "after": {"installed": installed}}
             module.exit_json(changed=False, **result)
 
-        mutation_argv = _planned_argv(binary, action, name, dev_instance, verbose)
+        mutation_argv = _planned_argv(binary, action, name, verbose)
         if module.check_mode:
-            result = _payload(name, state, dev_instance, installed, available, last,
-                              planned=action, msg="would %s translation %s" % (action, name))
+            result = _payload(name, state, installed, available, last,
+                              planned=action, msg="se ejecutaría %s de la traducción %s" % (action, name))
             result.update(cmd=mutation_argv, planned=True)
             if module._diff:
                 result["diff"] = {"before": {"installed": installed}, "after": {"installed": action != "remove"}}
@@ -422,47 +390,48 @@ def main():
                     result["diff"]["regenerated"] = True
             module.exit_json(changed=True, **result)
 
-        with _mutation_lock(_lock_path(dev_instance, dev_root)):
+        with _mutation_lock():
             # Re-read state under the module-local lock to avoid duplicate module work.
-            installed_codes, last = _query_languages(module, binary, "installed", dev_instance)
+            installed_codes, last = _query_languages(binary, "installed", timeout)
             installed = name in installed_codes
             action = _need_action(state, installed, update)
             if action in ("install", "update"):
-                available_codes, last = _query_languages(module, binary, "available", dev_instance)
+                available_codes, last = _query_languages(binary, "available", timeout)
                 available = name in available_codes
                 if not available:
-                    raise TranslateError("language %s is no longer available in local translation resources" % name)
-                last = _check_po_files(module, binary, name, dev_instance)
+                    raise TranslateError("el idioma %s dejó de estar disponible en los recursos de traducción locales" % name)
+                last = _check_po_files(binary, name, timeout)
             if not action:
-                result = _payload(name, state, dev_instance, installed, available, last,
-                                  msg="translation %s reached the requested state while waiting for the lock" % name)
+                result = _payload(name, state, installed, available, last,
+                                  msg="la traducción %s alcanzó el estado pedido mientras se esperaba el lock" % name)
                 module.exit_json(changed=False, **result)
-            mutation_argv = _planned_argv(binary, action, name, dev_instance, verbose)
+            mutation_argv = _planned_argv(binary, action, name, verbose)
             try:
-                last = _command(module, mutation_argv, "--%s %s" % (action, name))
+                last = _command(mutation_argv, "--%s %s" % (action, name), timeout)
             except TranslateError as exc:
+                # A failed or killed koha-translate can leave templates half written, whatever the action.
                 last = exc.result or last
-                result = _payload(name, state, dev_instance, installed, available, last, action=action, msg=str(exc))
-                result["partial"] = action in ("update", "remove")
+                result = _payload(name, state, _observe_installed(binary, name), available, last, action=action, msg=str(exc))
+                result["partial"] = True
                 module.fail_json(changed=True, **result)
             action_result = last
             try:
-                installed_codes, last = _query_languages(module, binary, "installed", dev_instance)
+                installed_codes, last = _query_languages(binary, "installed", timeout)
             except TranslateError as exc:
                 last = exc.result or last
-                result = _payload(name, state, dev_instance, None, available, last, action=action,
-                                  msg="%s; post-operation state could not be verified and may be partially modified" % exc)
+                result = _payload(name, state, None, available, last, action=action,
+                                  msg="%s; no se pudo verificar el estado posterior y puede haber cambios parciales" % exc)
                 result["partial"] = True
                 module.fail_json(changed=True, **result)
             final_installed = name in installed_codes
             if final_installed != (action != "remove"):
-                result = _payload(name, state, dev_instance, final_installed, available, last, action=action,
-                                  msg="koha-translate returned success but the requested installed state was not verified")
+                result = _payload(name, state, final_installed, available, last, action=action,
+                                  msg="koha-translate terminó bien pero no se verificó el estado de instalación pedido")
                 result["partial"] = True
                 module.fail_json(changed=True, **result)
 
-        result = _payload(name, state, dev_instance, final_installed, available, action_result, action=action,
-                          msg="translation %s %s and verified" % (name, {"install": "installed", "update": "updated", "remove": "removed"}[action]))
+        result = _payload(name, state, final_installed, available, action_result, action=action,
+                          msg="traducción %s %s y verificada" % (name, {"install": "instalada", "update": "actualizada", "remove": "eliminada"}[action]))
         if module._diff:
             result["diff"] = {"before": {"installed": installed}, "after": {"installed": final_installed}}
             if action == "update":
@@ -472,7 +441,6 @@ def main():
     except TranslateError as exc:
         last = exc.result or last
         module.fail_json(changed=False, name=name, state=state,
-                         scope="development" if dev_instance else "global", dev_instance=dev_instance,
                          action_executed=None, planned_action=None,
                          cmd=last.get("cmd", []) if last else [], rc=last.get("rc") if last else None,
                          stdout=last.get("stdout", "") if last else "", stderr=last.get("stderr", "") if last else "",
@@ -481,4 +449,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

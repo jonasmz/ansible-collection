@@ -1,0 +1,238 @@
+---
+# Fixes the behavior of plack, zebra, zebra_indexer, worker and zebra_rebuild against real Koha.
+- name: Verify the service modules
+  hosts: all
+  become: true
+  tasks:
+    # ------------------------------------------------------------------ plack
+    - name: Plack status while running
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: status
+      register: plack_status
+    - ansible.builtin.assert:
+        that: [plack_status.running, plack_status.enabled, not plack_status.changed]
+
+    - name: Plack stop in check mode changes nothing
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: stopped
+      check_mode: true
+      register: plack_check
+    - ansible.builtin.assert:
+        that: [plack_check.changed]
+    - name: Plack still running
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: status
+      register: plack_still
+    - ansible.builtin.assert:
+        that: [plack_still.running]
+
+    - name: Plack stop
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: stopped
+      register: plack_stop
+    - name: Plack stop is idempotent
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: stopped
+      register: plack_stop_again
+    - name: Plack status while stopped does not fail
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: status
+      register: plack_stopped_status
+    - ansible.builtin.assert:
+        that:
+          - plack_stop.changed
+          - not plack_stop_again.changed
+          - not plack_stopped_status.running
+          - not plack_stopped_status.changed
+
+    - name: Plack start, then restart and reload
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: "{{ item }}"
+      loop: [started, restarted, reloaded]
+      register: plack_cycle
+    - ansible.builtin.assert:
+        that:
+          - plack_cycle.results | map(attribute='running') | list == [true, true, true]
+
+    - name: Disable Plack in Apache without touching the daemon
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        enabled: false
+      register: plack_disable
+    - name: Enable Plack again
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        enabled: true
+      register: plack_enable
+    - ansible.builtin.assert:
+        that:
+          - plack_disable.changed
+          - not plack_disable.enabled
+          - plack_disable.apache_reload_required
+          - plack_enable.changed
+          - plack_enable.enabled
+          - plack_enable.apache_reload_required
+
+    - name: Disable and enable Plack reloading Apache from the module
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        enabled: "{{ item }}"
+        reload_apache: true
+      loop: [false, true]
+      register: plack_reloaded
+    - ansible.builtin.assert:
+        that:
+          - plack_reloaded.results | map(attribute='changed') | list == [true, true]
+          - plack_reloaded.results | map(attribute='apache_reload_required') | list == [false, false]
+    - name: Plack serves requests again after the reload
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: status
+      register: plack_final
+    - ansible.builtin.assert:
+        that: [plack_final.running, plack_final.enabled]
+
+    - name: Plack check mode projects enable/disable without touching Apache
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        enabled: false
+      check_mode: true
+      register: plack_disable_check
+    - name: Plack is still enabled
+      jmz.koha.plack:
+        instance: "{{ koha_instance }}"
+        state: status
+      register: plack_after_check
+    - ansible.builtin.assert:
+        that: [plack_disable_check.changed, plack_disable_check.planned, plack_after_check.enabled]
+
+    # ------------------------------------------------------------------ zebra
+    - name: Zebra and the indexer, stop then repeat
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: stopped
+      register: zebra_stop
+    - name: Zebra stop is idempotent
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: stopped
+      register: zebra_stop_again
+    - name: Zebra status while stopped
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: status
+      register: zebra_stopped
+    - ansible.builtin.assert:
+        that: [zebra_stop.changed, not zebra_stop_again.changed, zebra_stopped.state == 'stopped']
+
+    - name: Zebra start
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: started
+      register: zebra_start
+    - name: Zebra start is idempotent
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: started
+      register: zebra_start_again
+    - name: Zebra restart
+      jmz.koha.zebra:
+        instance: "{{ koha_instance }}"
+        state: restarted
+      register: zebra_restart
+    - ansible.builtin.assert:
+        that: [zebra_start.changed, not zebra_start_again.changed, zebra_restart.changed, zebra_restart.state == 'started']
+
+    # ------------------------------------------------------------------ zebra_indexer
+    - name: Indexer stop
+      jmz.koha.zebra_indexer:
+        instance: "{{ koha_instance }}"
+        state: stopped
+      register: indexer_stop
+    - name: Indexer stop is idempotent
+      jmz.koha.zebra_indexer:
+        instance: "{{ koha_instance }}"
+        state: stopped
+      register: indexer_stop_again
+    - name: Indexer start
+      jmz.koha.zebra_indexer:
+        instance: "{{ koha_instance }}"
+        state: started
+      register: indexer_start
+    - name: Indexer start is idempotent
+      jmz.koha.zebra_indexer:
+        instance: "{{ koha_instance }}"
+        state: started
+      register: indexer_start_again
+    - ansible.builtin.assert:
+        that: [indexer_stop.changed, not indexer_stop_again.changed, indexer_start.changed, not indexer_start_again.changed]
+
+    # ------------------------------------------------------------------ worker
+    - name: Workers stop
+      jmz.koha.worker:
+        instance: "{{ koha_instance }}"
+        queue: all
+        state: stopped
+      register: worker_stop
+    - name: Workers stop is idempotent
+      jmz.koha.worker:
+        instance: "{{ koha_instance }}"
+        queue: all
+        state: stopped
+      register: worker_stop_again
+    - name: Workers start
+      jmz.koha.worker:
+        instance: "{{ koha_instance }}"
+        queue: all
+        state: started
+      register: worker_start
+    - name: Workers status without a state
+      jmz.koha.worker:
+        instance: "{{ koha_instance }}"
+        queue: all
+      register: worker_status
+    - ansible.builtin.assert:
+        that: [worker_stop.changed, not worker_stop_again.changed, worker_start.changed, not worker_status.changed]
+
+    # ------------------------------------------------------------------ zebra_rebuild
+    - name: Incremental rebuild is not an error while the indexer daemon owns the work
+      jmz.koha.zebra_rebuild:
+        instance: "{{ koha_instance }}"
+      register: rebuild_incremental
+    - ansible.builtin.assert:
+        that:
+          - rebuild_incremental.work_skipped
+          - not rebuild_incremental.changed
+          - rebuild_incremental.skipped is not defined
+    - name: Quiet full rebuild
+      jmz.koha.zebra_rebuild:
+        instance: "{{ koha_instance }}"
+        mode: full
+        quiet: true
+        verbose: 0
+      register: rebuild_quiet
+    - name: Verbose full rebuild of biblios
+      jmz.koha.zebra_rebuild:
+        instance: "{{ koha_instance }}"
+        mode: full
+        target: biblios
+      register: rebuild_biblios
+    - name: Full rebuild in check mode does not run
+      jmz.koha.zebra_rebuild:
+        instance: "{{ koha_instance }}"
+        mode: full
+      check_mode: true
+      register: rebuild_check
+    - ansible.builtin.assert:
+        that:
+          - rebuild_quiet.changed
+          - rebuild_biblios.changed
+          - rebuild_check.changed
+          - not rebuild_check.executed

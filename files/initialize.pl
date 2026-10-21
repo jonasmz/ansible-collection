@@ -4,6 +4,7 @@
 use strict;
 use warnings;
 use JSON::PP qw(decode_json encode_json);
+use Scalar::Util qw(looks_like_number);
 use File::Basename qw(basename);
 use Cwd qw(abs_path);
 use C4::Context;
@@ -22,7 +23,6 @@ use Koha::ItemTypes;
 use Koha::CirculationRules;
 use Koha::AuthUtils;
 use Koha::Email;
-use Koha::Policy::Patrons::Cardnumber;
 
 our $PROTOCOL = 1;
 our @APPLIED_ACTIONS;
@@ -130,10 +130,8 @@ sub detect_state {
     my $libraries = Koha::Libraries->search->count;
     my $staff_categories = Koha::Patron::Categories->search({ category_type => 'S' })->count;
     my $item_types = Koha::ItemTypes->search->count;
-    my $superlibrarians = 0;
-    for my $patron (Koha::Patrons->search->as_list) {
-        $superlibrarians++ if $patron->is_superlibrarian;
-    }
+    # flags bit 0 is the superlibrarian permission; counting in SQL avoids loading every patron.
+    my ($superlibrarians) = $dbh->selectrow_array('SELECT COUNT(*) FROM borrowers WHERE (flags & 1) = 1');
     my $rules = Koha::CirculationRules->search->count;
     my $details = { tables => scalar(@tables), version => "$version", libraries => $libraries,
         staff_categories => $staff_categories, superlibrarians => $superlibrarians,
@@ -211,12 +209,18 @@ sub assert_existing_install_preferences {
     my $flavour = C4::Context->preference('marcflavour') || '';
     die "Existing Koha MARC flavour ($flavour) conflicts with requested flavour ($request->{marc_flavour})"
         if $flavour ne $request->{marc_flavour};
+    # The language only selects the installer data. Once Koha is installed jmz.koha.localization owns which
+    # languages are enabled, so a different set is reported but never blocks a repeated run.
     return if $request->{language} eq 'en';
-    my $staff = C4::Context->preference('StaffInterfaceLanguages') || '';
+    # Koha 24.11 renamed the staff language preference from "language".
+    my $staff_pref = Koha::Database->new->schema->resultset('Systempreference')->find({ variable => 'StaffInterfaceLanguages' })
+        ? 'StaffInterfaceLanguages' : 'language';
+    my $staff = C4::Context->preference($staff_pref) || '';
     my $opac = C4::Context->preference('OPACLanguages') || '';
     my %staff_languages = map { $_ => 1 } split /\s*,\s*/, $staff;
     my %opac_languages = map { $_ => 1 } split /\s*,\s*/, $opac;
-    die "Existing Koha language preferences conflict with requested language ($request->{language})"
+    push @WARNINGS, "El idioma $request->{language} no está habilitado en las preferencias de idioma de Koha; "
+        . "initialize solo lo usa al instalar y no administra idiomas, use jmz.koha.localization"
         unless $staff_languages{$request->{language}} && $opac_languages{$request->{language}};
 }
 
@@ -239,7 +243,6 @@ sub api_probe {
         state_info => $state_info,
         koha_version => scalar(Koha::version()),
         capabilities => $caps,
-        onboarding => $state_info,
     };
     return $result;
 }
@@ -308,6 +311,8 @@ sub ensure_admin {
     }
     my $category = Koha::Patron::Categories->find($data->{category});
     die 'Administrator category must be a staff category (type S)' unless $category && $category->category_type eq 'S';
+    eval { require Koha::Policy::Patrons::Cardnumber; 1 }
+        or die 'The installed Koha does not provide Koha::Policy::Patrons::Cardnumber and cannot validate the administrator card number';
     die 'Koha rejected the administrator card number' unless Koha::Policy::Patrons::Cardnumber->is_valid($data->{cardnumber});
     my ($password_valid, $password_error) = Koha::AuthUtils::is_password_valid($password, $category);
     die 'Koha rejected the administrator password for this category (' . ($password_error || 'invalid') . ')'
@@ -341,6 +346,13 @@ sub ensure_item_type {
     record_action($actions, $changed, "item_type_created:$code");
 }
 
+# Rule values come back from the database as text; compare numbers numerically (0.50 equals 0.5).
+sub same_value {
+    my ($current, $wanted) = map { "$_" } @_;    # JSON booleans stringify to 1/0
+    return $current == $wanted if looks_like_number($current) && looks_like_number($wanted);
+    return $current eq $wanted;
+}
+
 sub ensure_rules {
     my ($entries, $changed, $actions) = @_;
     for my $entry (@$entries) {
@@ -351,7 +363,7 @@ sub ensure_rules {
                 rule_name => $name, categorycode => $entry->{category},
                 itemtype => $entry->{item_type}, branchcode => $entry->{library},
             });
-            if ($current && defined($current->rule_value) && $current->rule_value eq "$rules->{$name}") {
+            if ($current && defined($current->rule_value) && same_value($current->rule_value, $rules->{$name})) {
                 next;
             }
             if ($current && ($current->branchcode // '') eq $entry->{library}
@@ -372,7 +384,7 @@ sub ensure_rules {
                 rule_name => $name, categorycode => $entry->{category},
                 itemtype => $entry->{item_type}, branchcode => $entry->{library},
             });
-            die "Circulation rule $name failed postcondition" unless defined($value) && "$value" eq "$rules->{$name}";
+            die "Circulation rule $name failed postcondition" unless defined($value) && same_value($value, $rules->{$name});
         }
         record_action($actions, $changed, "circulation_rules_set:$entry->{library}:$entry->{category}:$entry->{item_type}");
     }
@@ -466,6 +478,15 @@ sub initialize_install {
     return { changed => $changed, previous_state => $before, current_state => 'onboarding_required', actions => \@actions };
 }
 
+sub apply_onboarding_steps {
+    my ($request, $changed, $actions) = @_;
+    ensure_library($request->{library}, $changed, $actions);
+    for my $category (@{$request->{patron_categories}}) { ensure_category($category, $changed, $actions); }
+    for my $itemtype (@{$request->{item_types}}) { ensure_item_type($itemtype, $changed, $actions); }
+    ensure_admin($request->{administrator}, $request->{administrator}{password}, $changed, $actions);
+    ensure_rules($request->{circulation_rules}, $changed, $actions);
+}
+
 sub onboard {
     my ($request) = @_;
     $PHASE = 'onboarding';
@@ -476,11 +497,7 @@ sub onboard {
     my $txn = $schema->txn_scope_guard;
     my $action_count = scalar @APPLIED_ACTIONS;
     my $ok = eval {
-        ensure_library($request->{library}, \$changed, \@actions);
-        for my $category (@{$request->{patron_categories}}) { ensure_category($category, \$changed, \@actions); }
-        for my $itemtype (@{$request->{item_types}}) { ensure_item_type($itemtype, \$changed, \@actions); }
-        ensure_admin($request->{administrator}, $request->{administrator}{password}, \$changed, \@actions);
-        ensure_rules($request->{circulation_rules}, \$changed, \@actions);
+        apply_onboarding_steps($request, \$changed, \@actions);
         $txn->commit;
         1;
     };
@@ -493,6 +510,68 @@ sub onboard {
     return { changed => $changed, actions => \@actions };
 }
 
+# Run the onboarding exactly as a real run would, then roll everything back. Conflicts die just
+# like in a real run; the returned actions are what a real run would create.
+sub dry_run_onboarding {
+    my ($request) = @_;
+    $PHASE = 'planning';
+    assert_db_privileges(0);
+    my $schema = Koha::Database->schema;
+    my @actions;
+    my $changed = 0;
+    $schema->txn_begin;
+    my $ok = eval { apply_onboarding_steps($request, \$changed, \@actions); 1 };
+    my $failure = $@;
+    $schema->txn_rollback;
+    @APPLIED_ACTIONS = ();
+    $CHANGED = 0;
+    die $failure unless $ok;
+    return @actions;
+}
+
+# On a database without installer data nothing exists yet, so every declared entity would be created.
+sub planned_onboarding_actions {
+    my ($request) = @_;
+    return (
+        "library_created:$request->{library}{code}",
+        (map { "patron_category_created:$_->{code}" } @{$request->{patron_categories}}),
+        (map { "item_type_created:$_->{code}" } @{$request->{item_types}}),
+        'administrator_created',
+        (map { "circulation_rules_set:$_->{library}:$_->{category}:$_->{item_type}" } @{$request->{circulation_rules}}),
+    );
+}
+
+# Check mode. The installer (schema DDL and data) is not transactional, so before it has run only
+# the non-mutating checks are possible and the plan is reported as incomplete.
+sub plan_initialize {
+    my ($request) = @_;
+    $PHASE = 'planning';
+    assert_instance_database();
+    my $installer = C4::Installer->new() or die 'C4::Installer could not connect to the instance database';
+    assert_capabilities($installer);
+    validate_circulation_rule_names($request->{circulation_rules});
+    my ($state, $info) = detect_state($installer);
+    $INITIAL_STATE = $OBSERVED_STATE = $state;
+    die "Unsafe installation state: $state" if $state eq 'data_incomplete' || $state eq 'inconsistent' || $state eq 'upgrade_required';
+    assert_existing_install_preferences($request, $state);
+    assert_db_privileges($state eq 'uninitialized');
+    my @actions;
+    my $complete;
+    if ($state eq 'uninitialized' || $state eq 'schema_created') {
+        push @actions, 'schema_created' if $state eq 'uninitialized';
+        push @actions, 'initial_data_loaded', 'installer_version_registered', planned_onboarding_actions($request);
+        $complete = 0;
+    } else {
+        @actions = dry_run_onboarding($request);
+        $complete = 1;
+    }
+    return { protocol => $PROTOCOL, ok => JSON::PP::true, operation => 'initialize', planned => JSON::PP::true,
+        complete => $complete ? JSON::PP::true : JSON::PP::false,
+        changed => @actions ? JSON::PP::true : JSON::PP::false,
+        previous_state => $state, current_state => $state, actions => \@actions,
+        state_info => $info, warnings => \@WARNINGS };
+}
+
 my $raw = do { local $/; <STDIN> };
 my $request = eval { decode_json($raw || '') };
 fail('protocol_error', 'Invalid JSON request') if $@ || ref($request) ne 'HASH';
@@ -502,6 +581,8 @@ my $response;
 my $ok = eval {
     if ($operation eq 'inspect') {
         $response = api_probe($request);
+    } elsif ($operation eq 'initialize' && defined($request->{apply}) && !$request->{apply}) {
+        $response = plan_initialize($request);
     } elsif ($operation eq 'initialize') {
         my $install = initialize_install($request);
         my $business = onboard($request);

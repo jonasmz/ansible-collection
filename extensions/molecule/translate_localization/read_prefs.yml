@@ -1,0 +1,12 @@
+---
+# Sets the fact `prefs` with the language preferences straight from the database.
+- name: Read the language preferences
+  ansible.builtin.command: >-
+    mysql --protocol=socket --batch --skip-column-names koha_{{ koha_instance }}
+    --execute "SELECT variable, value FROM systempreferences WHERE variable IN
+    ('StaffInterfaceLanguages', 'OPACLanguages', 'opaclanguagesdisplay', 'OpacLangSelectorMode', 'StaffLangSelectorMode')"
+  register: prefs_raw
+  changed_when: false
+- name: Expose them as a mapping
+  ansible.builtin.set_fact:
+    prefs: "{{ dict(prefs_raw.stdout_lines | map('split', '\t')) }}"

@@ -4,10 +4,8 @@
 import importlib.util
 import os
 import sys
-import tempfile
 import types
 import unittest
-import xml.etree.ElementTree as ET
 from unittest import mock
 
 
@@ -28,7 +26,7 @@ class FakeAnsibleModule:
 
     def __init__(self, **kwargs):
         defaults = {"name": "es-ES", "state": "present", "update": False,
-                    "dev_instance": None, "verbose": False}
+                    "verbose": False, "timeout": 600}
         defaults.update(type(self).params)
         self.params = defaults
         self.check_mode = type(self).check_mode
@@ -38,10 +36,6 @@ class FakeAnsibleModule:
 
     def get_bin_path(self, name, required=False):
         return "/usr/sbin/koha-translate"
-
-    def run_command(self, argv, **kwargs):
-        self.commands.append(list(argv))
-        return type(self).runner(argv)
 
     def exit_json(self, **kwargs):
         raise ModuleExit(kwargs)
@@ -74,8 +68,8 @@ class TranslateTest(unittest.TestCase):
         for patcher in (
             mock.patch.object(self.module.os.path, "isfile", return_value=True),
             mock.patch.object(self.module.os, "access", return_value=True),
-            mock.patch.object(self.module, "_development_tree", return_value="/tmp/koha-dev"),
             mock.patch.object(self.module, "_mutation_lock", self.noop_lock()),
+            mock.patch.object(self.module, "_run", self.fake_run),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -85,9 +79,14 @@ class TranslateTest(unittest.TestCase):
         from contextlib import contextmanager
 
         @contextmanager
-        def lock(_path):
+        def lock(*_args, **_kwargs):
             yield
         return lock
+
+    @staticmethod
+    def fake_run(argv, timeout):
+        FakeAnsibleModule.last.commands.append(list(argv))
+        return FakeAnsibleModule.runner(argv)
 
     def run_module(self, installed=None, available=None, rc_by_op=None, stdout_override=None,
                    stderr_override=None):
@@ -131,55 +130,29 @@ class TranslateTest(unittest.TestCase):
             self.module.main()
         return raised.exception.result, FakeAnsibleModule.last.commands
 
-    def test_language_and_instance_validators(self):
+    def test_language_validator(self):
         for code in ("es", "es-ES", "zh-Hans-CN", "en-GB"):
             self.assertEqual(self.module.validate_language(code), code)
         for code in ("", "../es", "es_ES", "--help", "a/b", "éS"):
             with self.assertRaises(self.module.TranslateError):
                 self.module.validate_language(code)
-        for instance in ("koha", "koha-dev", "a1"):
-            self.assertEqual(self.module.validate_instance(instance), instance)
-        for instance in ("", "Upper", "../x", "a" * 12, "with_underscore"):
-            with self.assertRaises(self.module.TranslateError):
-                self.module.validate_instance(instance)
 
-    def test_development_instance_requires_git_configuration_and_checkout(self):
-        self.module = load_module()
-        root = ET.fromstring("<config><git_install>1</git_install><intranetdir>/srv/koha-dev</intranetdir></config>")
-        parsed = types.SimpleNamespace(getroot=lambda: root)
-        with mock.patch.object(self.module.os.path, "isfile", return_value=True), \
-                mock.patch.object(self.module.ET, "parse", return_value=parsed), \
-                mock.patch.object(self.module.os.path, "isdir", return_value=True):
-            self.assertEqual(self.module._development_tree("koha-dev"), "/srv/koha-dev")
-        production = ET.fromstring("<config><git_install>0</git_install><intranetdir>/srv/koha</intranetdir></config>")
-        with mock.patch.object(self.module.os.path, "isfile", return_value=True), \
-                mock.patch.object(self.module.ET, "parse", return_value=types.SimpleNamespace(getroot=lambda: production)):
-            with self.assertRaisesRegex(self.module.TranslateError, "not configured as a development"):
-                self.module._development_tree("koha-prod")
+    def query(self, rc, stdout, stderr=""):
+        with mock.patch.object(self.module, "_run", return_value=(rc, stdout, stderr)):
+            return self.module._query_languages("/usr/sbin/koha-translate", "installed", 30)
 
     def test_exact_list_parsing_and_empty_list(self):
-        class Runner:
-            def run_command(self, argv):
-                return 0, "es-ES\nes-ES\nes-AR\n", ""
-        codes, _ = self.module._query_languages(Runner(), "/usr/sbin/koha-translate", "installed", None)
+        codes, _ = self.query(0, "es-ES\nes-ES\nes-AR\n")
         self.assertEqual(codes, ["es-ES", "es-AR"])
-        class EmptyRunner:
-            def run_command(self, argv):
-                return 0, "", ""
-        codes, _ = self.module._query_languages(EmptyRunner(), "/usr/sbin/koha-translate", "installed", None)
+        codes, _ = self.query(0, "")
         self.assertEqual(codes, [])
-        self.assertNotIn("es-ES", codes)
-        class KohaEmptyListRunner:
-            def run_command(self, argv):
-                return 1, "", ""
-        codes, result = self.module._query_languages(KohaEmptyListRunner(), "/usr/sbin/koha-translate", "installed", None)
-        self.assertEqual(codes, [])
-        self.assertEqual(result["rc"], 1)
-        class BadRunner:
-            def run_command(self, argv):
-                return 0, "Installed languages:\n", ""
+        # Koha exits 1 without output when no non-English translation is installed.
+        codes, result = self.query(1, "")
+        self.assertEqual((codes, result["rc"]), ([], 1))
         with self.assertRaises(self.module.TranslateError):
-            self.module._query_languages(BadRunner(), "/usr/sbin/koha-translate", "installed", None)
+            self.query(0, "Installed languages:\n")
+        with self.assertRaises(self.module.TranslateError):
+            self.query(1, "", "boom")
 
     def test_install_absent_then_second_run_is_idempotent(self):
         result, commands = self.run_module()
@@ -217,7 +190,7 @@ class TranslateTest(unittest.TestCase):
         FakeAnsibleModule.params = {"name": "en", "state": "absent"}
         result, _ = self.run_module()
         self.assertTrue(result["failed"])
-        self.assertIn("cannot be removed", result["msg"])
+        self.assertIn("no se puede quitar", result["msg"])
 
     def test_update_requested_for_absent_language_installs(self):
         FakeAnsibleModule.params = {"name": "es-ES", "update": True}
@@ -236,25 +209,26 @@ class TranslateTest(unittest.TestCase):
         self.assertFalse(result["changed"])
         self.assertFalse(any("--available" in c for c in commands))
 
-    def test_scopes_and_cli_argument_limit(self):
-        FakeAnsibleModule.params = {"dev_instance": "koha-dev"}
+    def test_verbose_is_passed_through(self):
+        FakeAnsibleModule.params = {"verbose": True}
         result, commands = self.run_module()
-        self.assertTrue(result["changed"], result)
-        self.assertEqual(result["scope"], "development")
-        self.assertIn(["/usr/sbin/koha-translate", "--install", "es-ES", "--dev", "koha-dev"], commands)
-        FakeAnsibleModule.params = {"dev_instance": "koha-dev", "verbose": True}
-        result, commands = self.run_module()
-        self.assertTrue(result["failed"])
-        self.assertIn("four argv", result["msg"])
-        self.assertEqual(commands, [])
+        self.assertTrue(result["changed"])
+        self.assertIn(["/usr/sbin/koha-translate", "--install", "es-ES", "--verbose"], commands)
+
+    def test_development_checkouts_are_no_longer_a_parameter(self):
+        self.assertNotIn("dev_instance", self.module.main.__code__.co_names)
+        self.assertFalse(hasattr(self.module, "_development_tree"))
+        result, _ = self.run_module()
+        self.assertNotIn("scope", result)
+        self.assertNotIn("dev_instance", result)
 
     def test_unknown_unavailable_and_incomplete_po(self):
         result, _ = self.run_module(available=[])
         self.assertTrue(result["failed"])
-        self.assertIn("not available", result["msg"])
+        self.assertIn("no está disponible", result["msg"])
         result, _ = self.run_module(rc_by_op={"--check": 1}, stderr_override={"--check": "Error: x-pref.po not found"})
         self.assertTrue(result["failed"])
-        self.assertIn("PO files are incomplete", result["msg"])
+        self.assertIn("faltan archivos PO", result["msg"])
 
     def test_check_mode_and_diff_mode(self):
         FakeAnsibleModule.check_mode = True
@@ -271,11 +245,11 @@ class TranslateTest(unittest.TestCase):
         self.assertFalse(result["changed"])
         self.assertIsNone(result["planned_action"])
 
-    def test_dev_scope_does_not_fallback_and_validation_precedes_cli(self):
-        FakeAnsibleModule.params = {"dev_instance": "production"}
-        with mock.patch.object(self.module, "_development_tree", side_effect=self.module.TranslateError("not development")):
-            result, commands = self.run_module()
+    def test_invalid_timeout_is_rejected_before_running_anything(self):
+        FakeAnsibleModule.params = {"timeout": 0}
+        result, commands = self.run_module()
         self.assertTrue(result["failed"])
+        self.assertIn("timeout debe ser positivo", result["msg"])
         self.assertEqual(commands, [])
 
     def test_operation_failure_has_changed_and_diagnostics(self):
@@ -313,38 +287,87 @@ class TranslateTest(unittest.TestCase):
         self.assertTrue(result["partial"])
         self.assertFalse(result["installed"])
 
-    def test_global_and_dev_lock_partition(self):
-        self.assertNotEqual(self.module._lock_path(None), self.module._lock_path("dev1", "/tmp/dev1"))
-        self.assertEqual(self.module._lock_path(None), "/run/lock/jmz-koha-translate-global.lock")
-        self.assertEqual(self.module._lock_path("dev1", "/tmp/shared-tree"),
-                         self.module._lock_path("dev2", "/tmp/shared-tree"))
-        self.assertNotEqual(self.module._lock_path("dev1", "/tmp/dev1"),
-                            self.module._lock_path("dev2", "/tmp/dev2"))
+    def test_failed_install_is_partial_too_and_reports_the_observed_state(self):
+        result, _ = self.run_module(rc_by_op={"--install": 3}, stderr_override={"--install": "disk full"})
+        self.assertTrue(result["failed"] and result["changed"] and result["partial"])
+        self.assertEqual(result["action_executed"], "install")
+        self.assertFalse(result["installed"])
+        self.assertIn("disk full", result["stderr"])
 
-    def test_lock_released_on_error(self):
+    def test_timeout_kills_the_mutation_and_reports_partial(self):
+        calls = []
+
+        def runner(argv):
+            calls.append(argv)
+            if argv[1] == "--help":
+                return 0, "--list --available --check --install --update --remove", ""
+            if argv[1] == "--list" and "--available" in argv:
+                return 0, "es-ES\n", ""
+            if argv[1] == "--list":
+                return 0, "", ""
+            if argv[1] == "--check":
+                return 0, "", ""
+            raise self.module.CommandTimeout("half written", "")
+
+        FakeAnsibleModule.runner = runner
+        with self.assertRaises(ModuleExit) as raised:
+            self.module.main()
+        result = raised.exception.result
+        self.assertTrue(result["failed"] and result["changed"] and result["partial"])
+        self.assertIn("excedió el límite de 600 segundos", result["msg"])
+        self.assertEqual(result["stdout"], "half written")
+        self.assertFalse(result["installed"])
+
+    def test_output_that_is_not_utf8_cannot_break_the_result(self):
+        self.module = load_module()  # setUp replaced _run with the simulated CLI
+        process = mock.Mock(returncode=0, pid=1)
+        process.communicate.return_value = (b"Installation r\xe9ussie\n", b"warning \xff")
+        with mock.patch.object(self.module.subprocess, "Popen", return_value=process):
+            result = self.module._command(["koha-translate", "--install", "fr-FR"], "--install fr-FR", 30)
+        for text in (result["stdout"], result["stderr"]):
+            text.encode("utf-8")
+        self.assertIn("r\ufffdussie", result["stdout"])
+        self.assertEqual(self.module._bounded("lone \udce9 surrogate"), "lone ? surrogate")
+
+    def test_run_kills_the_process_group_on_timeout(self):
+        self.module = load_module()  # setUp replaced _run with the simulated CLI
+        process = mock.Mock(pid=4321)
+        process.communicate.side_effect = [self.module.subprocess.TimeoutExpired("koha-translate", 5), (b"partial", b"")]
+        with mock.patch.object(self.module.subprocess, "Popen", return_value=process) as popen, \
+                mock.patch.object(self.module.os, "killpg") as killpg:
+            with self.assertRaises(self.module.CommandTimeout) as raised:
+                self.module._run(["koha-translate", "--install", "es-ES"], 5)
+        killpg.assert_called_once_with(4321, self.module.signal.SIGKILL)
+        self.assertEqual(raised.exception.stdout, "partial")
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        self.assertEqual(popen.call_args.kwargs["env"]["LC_ALL"], "C")
+
+    def test_mutations_share_one_global_lock_that_waits_a_bounded_time(self):
         self.module = load_module()
-        with tempfile.NamedTemporaryFile() as lock:
-            with self.assertRaises(self.module.TranslateError):
-                with self.module._mutation_lock(lock.name, timeout=0):
-                    raise self.module.TranslateError("boom")
-            # Reopening and acquiring succeeds after the exceptional exit.
-            with self.module._mutation_lock(lock.name, timeout=0):
+        captured = {}
+
+        @__import__("contextlib").contextmanager
+        def fake_lock(scope, name, message, wait=0):
+            captured.update(scope=scope, name=name, wait=wait)
+            yield
+
+        with mock.patch.object(self.module, "exclusive_lock", fake_lock):
+            with self.module._mutation_lock():
                 pass
+        self.assertEqual(captured, {"scope": "translate", "name": "global", "wait": self.module.LOCK_TIMEOUT})
 
-    def test_lock_timeout_reports_conflict(self):
-        import fcntl
+    def test_a_busy_lock_is_reported_as_a_translate_error(self):
         self.module = load_module()
-        with tempfile.NamedTemporaryFile() as lock:
-            holder = open(lock.name, "a", encoding="utf-8")
-            fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            try:
-                with self.assertRaises(self.module.TranslateError) as raised:
-                    with self.module._mutation_lock(lock.name, timeout=0):
-                        pass
-                self.assertIn("timed out waiting", str(raised.exception))
-            finally:
-                fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
-                holder.close()
+
+        @__import__("contextlib").contextmanager
+        def busy(*_args, **_kwargs):
+            raise self.module.ModuleInputError("lock ocupado")
+            yield
+
+        with mock.patch.object(self.module, "exclusive_lock", busy):
+            with self.assertRaisesRegex(self.module.TranslateError, "lock ocupado"):
+                with self.module._mutation_lock():
+                    pass
 
 
 if __name__ == "__main__":

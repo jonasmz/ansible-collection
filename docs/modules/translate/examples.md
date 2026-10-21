@@ -1,107 +1,116 @@
-# Playbook examples
+# Ejemplos de `jmz.koha.translate`
 
-These tasks use the collection FQCN and require administrative privileges for
-the Koha host.
+[Guía](README.md) · [Índice](../README.md) · [Guía general](../../README.md)
 
-## Install Spanish globally
+Estas tareas usan el FQCN de la colección y requieren privilegios administrativos en
+el host de Koha.
 
-~~~yaml
-- name: Install Spanish translation
+## Instalar el español
+
+```yaml
+- name: Instalar la traducción al español
   hosts: koha_servers
   become: true
   tasks:
-    - name: Ensure Spanish templates are installed
+    - name: Asegurar las plantillas en español
       jmz.koha.translate:
         name: es-ES
         state: present
-~~~
+```
 
-## Ensure French is absent
+## Asegurar que el francés esté ausente
 
-~~~yaml
-- name: Remove French translation
+```yaml
+- name: Quitar la traducción al francés
   hosts: koha_servers
   become: true
   tasks:
-    - name: Ensure French templates are absent
+    - name: Asegurar que las plantillas en francés estén ausentes
       jmz.koha.translate:
         name: fr-FR
         state: absent
-~~~
+```
 
-## Explicit update
+## Actualización explícita
 
-~~~yaml
-- name: Regenerate Spanish templates
+```yaml
+- name: Regenerar las plantillas en español
   hosts: koha_servers
   become: true
   tasks:
-    - name: Explicitly update installed Spanish templates
+    - name: Actualizar explícitamente las plantillas instaladas
       jmz.koha.translate:
         name: es-ES
         state: present
         update: true
-~~~
+```
 
-This can report changed on every run. Koha's update removes the current
-translation before reinstalling it.
+Puede informar `changed` en cada ejecución: la actualización de Koha elimina la
+traducción actual antes de reinstalarla.
 
-## Development checkout
+## Limitar el tiempo de una instalación
 
-~~~yaml
-- name: Install Spanish in the development checkout
-  hosts: koha_dev_hosts
+```yaml
+- name: Instalar con un límite de tiempo
+  jmz.koha.translate:
+    name: es-ES
+    timeout: 120
   become: true
-  tasks:
-    - name: Ensure development translation is installed
-      jmz.koha.translate:
-        name: es-ES
-        state: present
-        dev_instance: koha-dev
-~~~
+```
 
-The name must be a real Koha instance configured with git_install or
-dev_install enabled. A production instance name is rejected. Do not combine
-verbose: true with dev_instance.
+Si `koha-translate` excede el límite, se termina y el resultado informa
+`changed: true` y `partial: true`.
 
-## Check and diff mode
+## Instalar el idioma y activarlo
 
-~~~yaml
-- name: Preview translation changes
-  hosts: koha_servers
+`translate` solo instala las plantillas. Para usarlas en la interfaz, habilítelas con
+[`jmz.koha.localization`](../localization/README.md):
+
+```yaml
+- name: Instalar el español
+  jmz.koha.translate:
+    name: es-ES
   become: true
-  tasks:
-    - name: Show the semantic plan
-      jmz.koha.translate:
-        name: es-ES
-        state: present
-      check_mode: true
-      diff: true
-~~~
 
-## Isolated integration-test design
+- name: Activarlo en el personal y el OPAC
+  jmz.koha.localization:
+    instance: biblioteca
+    staff_languages: [es-ES, en]
+    opac_languages: [es-ES, en]
+  become: true
+```
 
-The unit tests simulate the Koha executable. For a real integration check,
-prepare a disposable Debian/Ubuntu VM or container with Koha, koha-l10n, and a
-development instance if testing --dev. Do not run this sequence against a
-production installation.
+## Check mode y diff
 
-1. Record the initial koha-translate --list and verify es-ES appears in
-   --list --available.
-2. Run the module with state present; verify it reports changed and es-ES is
-   listed as installed.
-3. Run the same task again; verify changed is false.
-4. Run with update true; verify the command completes and es-ES remains listed.
-5. Run with state absent; verify changed and es-ES disappears.
-6. Run state absent again; verify changed is false.
-7. In a disposable copy of the PO directory, remove one required file and
-   verify installation fails before mutation.
-8. Run check mode and verify no mutator is invoked.
-9. If a dev checkout is configured, repeat list/check/install/remove with
-   dev_instance and verify the global installed list is unaffected.
-10. Observe cache effects separately: Koha 26.05.x install/remove clear cache;
-    update does not call the top-level flush_cache function.
+```yaml
+- name: Previsualizar los cambios de traducción
+  jmz.koha.translate:
+    name: es-ES
+    state: present
+  check_mode: true
+  diff: true
+  become: true
+```
 
-These are test procedures, not results from this workspace. No Koha installation
-or koha-translate executable was available for integration execution.
+## Prueba de integración aislada
 
+Las pruebas unitarias simulan el ejecutable de Koha. Para una comprobación real use
+una VM o un contenedor Debian/Ubuntu desechable con Koha y `koha-l10n`; el escenario
+de molecule `translate_localization` lo hace automáticamente. No ejecute esta
+secuencia contra una instalación de producción.
+
+1. Registre `koha-translate --list` y verifique que `es-ES` aparezca en
+   `--list --available`.
+2. Ejecute el módulo con `state: present`; debe informar `changed` y `es-ES` debe
+   figurar como instalado.
+3. Repita la tarea; `changed` debe ser `false`.
+4. Ejecute con `update: true`; el comando debe terminar y `es-ES` seguir listado.
+5. Ejecute con `state: absent`; debe informar `changed` y `es-ES` debe desaparecer.
+6. Repita `state: absent`; `changed` debe ser `false`.
+7. En una copia desechable del directorio de PO, quite un archivo requerido y
+   verifique que la instalación falla antes de modificar nada.
+8. Ejecute el check mode y verifique que no se invoca ningún modificador.
+9. Observe aparte los efectos de caché: en Koha 26.05.x instalar y quitar limpian la
+   caché; actualizar no llama a la función de limpieza de nivel superior.
+
+Los pasos 1 a 6 y 8 los ejecuta el escenario de molecule contra Koha 26.05.04.

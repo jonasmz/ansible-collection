@@ -1,0 +1,343 @@
+---
+# Characterizes the current behavior of jmz.koha.translate and jmz.koha.localization against real Koha.
+- name: Verify translate and localization
+  hosts: all
+  become: true
+  vars:
+    spec: "{{ {'instance': koha_instance} | combine(koha_init) }}"
+  tasks:
+    # Start from a known state so verify can be repeated against the same container.
+    - name: Make sure the translations used below are not installed
+      ansible.builtin.command: koha-translate --remove {{ item }}
+      loop: [de-DE, fr-FR]
+      failed_when: false
+      changed_when: false
+    - name: Reset the language preferences
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [en]
+        opac_languages: [en]
+        opac_language_selector: false
+        opac_selector_position: footer
+        staff_selector_position: footer
+
+    # ------------------------------------------------------------------ translate
+    - name: Languages Koha reports as installed
+      ansible.builtin.command: koha-translate --list
+      register: listed
+      changed_when: false
+      failed_when: false
+    - name: An installed translation is left alone
+      jmz.koha.translate:
+        name: es-ES
+      register: already
+    - ansible.builtin.assert:
+        that:
+          - "'es-ES' in listed.stdout_lines"
+          - not already.changed
+          - already.installed
+          - already.action_executed is none
+          - already.scope is not defined
+
+    - name: Check mode plans an installation without doing it
+      jmz.koha.translate:
+        name: de-DE
+      check_mode: true
+      register: planned
+    - ansible.builtin.command: koha-translate --list
+      register: after_check
+      changed_when: false
+      failed_when: false
+    - ansible.builtin.assert:
+        that:
+          - planned.changed
+          - planned.planned_action == 'install'
+          - "'de-DE' not in after_check.stdout_lines"
+
+    - name: Install, repeat, regenerate and remove a translation
+      jmz.koha.translate:
+        name: de-DE
+        state: "{{ item.state }}"
+        update: "{{ item.get('update', false) }}"
+      loop:
+        - {name: install, state: present}
+        - {name: install again, state: present}
+        - {name: update, state: present, update: true}
+        - {name: remove, state: absent}
+        - {name: remove again, state: absent}
+      loop_control:
+        label: "{{ item.name }}"
+      register: lifecycle
+    - ansible.builtin.assert:
+        that:
+          - lifecycle.results[0].changed and lifecycle.results[0].action_executed == 'install' and lifecycle.results[0].installed
+          - not lifecycle.results[1].changed
+          - lifecycle.results[2].changed and lifecycle.results[2].action_executed == 'update'
+          - lifecycle.results[3].changed and lifecycle.results[3].action_executed == 'remove' and not lifecycle.results[3].installed
+          - not lifecycle.results[4].changed
+
+    # koha-translate prints a byte that is not UTF-8 when it installs fr-FR; the module returns the
+    # output with invalid bytes replaced instead of letting Ansible reject the response.
+    - name: Install a translation whose output is not valid UTF-8
+      jmz.koha.translate:
+        name: fr-FR
+      register: fr_install
+    - name: Remove it again
+      jmz.koha.translate:
+        name: fr-FR
+        state: absent
+      register: fr_remove
+    - ansible.builtin.assert:
+        that:
+          - fr_install.changed
+          - fr_install.installed
+          - fr_remove.changed
+
+    - name: A call that outlives its timeout is killed and reported as partial
+      jmz.koha.translate:
+        name: de-DE
+        timeout: 1
+      register: slow
+      ignore_errors: true
+    - name: Koha is left with whatever the killed install wrote
+      ansible.builtin.command: koha-translate --remove de-DE
+      changed_when: false
+      failed_when: false
+    - ansible.builtin.assert:
+        that:
+          - slow is failed
+          - "'excedió el límite de 1 segundos' in slow.msg"
+          - slow.changed
+          - slow.partial
+          - slow.action_executed == 'install'
+
+    - name: The retired dev_instance option no longer exists
+      jmz.koha.translate:
+        name: es-ES
+        dev_instance: molecule
+      register: no_dev
+      ignore_errors: true
+    - ansible.builtin.assert:
+        that:
+          - no_dev is failed
+          - "'Unsupported parameters' in no_dev.msg"
+    - name: The retired language aliases no longer exist either
+      jmz.koha.translate:
+        language: es-ES
+      register: no_alias
+      ignore_errors: true
+    - ansible.builtin.assert:
+        that:
+          - no_alias is failed
+          - "'missing required arguments: name' in no_alias.msg or 'Unsupported parameters' in no_alias.msg"
+
+    - name: Requests Koha cannot satisfy are refused
+      jmz.koha.translate:
+        name: "{{ item.name }}"
+        state: "{{ item.state | default('present') }}"
+      loop:
+        - {name: xx-XX, pattern: no está disponible}
+        - {name: en, state: absent, pattern: no se puede quitar}
+        - {name: ../etc, pattern: código de idioma}
+      loop_control:
+        label: "{{ item.name }}"
+      register: refused
+      ignore_errors: true
+    - ansible.builtin.assert:
+        that:
+          - item is failed
+          - item.item.pattern in item.msg
+          - not item.changed
+        quiet: true
+      loop: "{{ refused.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+    - name: English is built in
+      jmz.koha.translate:
+        name: en
+      register: english
+    - ansible.builtin.assert:
+        that: not english.changed and english.installed
+
+    # ------------------------------------------------------------------ localization
+    - ansible.builtin.include_tasks: read_prefs.yml
+    - name: Remember the starting preferences
+      ansible.builtin.set_fact:
+        prefs_start: "{{ prefs }}"
+
+    - name: Check mode plans the change without writing it
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [en, es-ES]
+      check_mode: true
+      register: loc_check
+    - ansible.builtin.include_tasks: read_prefs.yml
+    - ansible.builtin.assert:
+        that:
+          - loc_check.changed
+          - loc_check.planned
+          - loc_check.updated_preferences == [loc_check.staff_preference]
+          - prefs == prefs_start
+
+    - name: Requests that must fail without touching the preferences
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: "{{ item.staff | default(omit) }}"
+      loop:
+        - {name: language not installed, staff: [en, fr-FR], pattern: is not installed}
+        - {name: duplicate language, staff: [es-ES, es-ES], pattern: duplicado}
+        - {name: nothing requested, pattern: declare al menos}
+      loop_control:
+        label: "{{ item.name }}"
+      register: loc_refused
+      ignore_errors: true
+    - name: Selector position outside the allowed choices
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        opac_selector_position: sideways
+      register: loc_choice
+      ignore_errors: true
+    - ansible.builtin.include_tasks: read_prefs.yml
+    - ansible.builtin.assert:
+        that:
+          - item is failed
+          - item.item.pattern in item.msg
+          - not item.changed
+        quiet: true
+      loop: "{{ loc_refused.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+    - ansible.builtin.assert:
+        that:
+          - loc_choice is failed
+          - "'must be one of' in loc_choice.msg"
+          - prefs == prefs_start
+
+    - name: Apply languages and selectors
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [en, es-ES]
+        opac_languages: [es-ES, en]
+        opac_language_selector: true
+      register: loc_apply
+    - ansible.builtin.include_tasks: read_prefs.yml
+    - name: Apply the same declaration again
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [en, es-ES]
+        opac_languages: [es-ES, en]
+        opac_language_selector: true
+      register: loc_again
+    - ansible.builtin.assert:
+        that:
+          - loc_apply.changed
+          - loc_apply.updated_preferences | length == 3
+          - prefs.StaffInterfaceLanguages == 'en,es-ES'
+          - prefs.OPACLanguages == 'es-ES,en'
+          - prefs.opaclanguagesdisplay == '1'
+          - not loc_again.changed
+          - loc_again.updated_preferences == []
+
+    - name: Selector positions are applied although the database keeps no list of choices
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        opac_selector_position: top
+        staff_selector_position: both
+      register: loc_position
+    - ansible.builtin.include_tasks: read_prefs.yml
+    - name: The same positions again
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        opac_selector_position: top
+        staff_selector_position: both
+      register: loc_position_again
+    - ansible.builtin.assert:
+        that:
+          - loc_position.changed
+          - prefs.OpacLangSelectorMode == 'top'
+          - prefs.StaffLangSelectorMode == 'both'
+          - not loc_position_again.changed
+
+    - name: Changing only the order touches only that preference
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        opac_languages: [en, es-ES]
+      register: loc_order
+    - ansible.builtin.assert:
+        that:
+          - loc_order.changed
+          - loc_order.updated_preferences == ['OPACLanguages']
+
+    # --- preferences are written all or nothing: block the second write with a database trigger
+    - ansible.builtin.include_tasks: read_prefs.yml
+    - ansible.builtin.set_fact:
+        prefs_before_failure: "{{ prefs }}"
+    - name: Make the OPACLanguages write fail
+      ansible.builtin.command: mysql --protocol=socket koha_{{ koha_instance }}
+      args:
+        stdin: |
+          DELIMITER $$
+          CREATE TRIGGER block_opac_languages BEFORE UPDATE ON systempreferences FOR EACH ROW
+          BEGIN
+            IF NEW.variable = 'OPACLanguages' THEN
+              SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'blocked';
+            END IF;
+          END$$
+          DELIMITER ;
+      changed_when: false
+    - name: Change both language lists while the second write is blocked
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [es-ES, en]
+        opac_languages: [es-ES, en]
+      register: loc_atomic
+      ignore_errors: true
+    - name: Remove the trigger
+      ansible.builtin.command: mysql --protocol=socket koha_{{ koha_instance }} --execute "DROP TRIGGER block_opac_languages"
+      changed_when: false
+    - ansible.builtin.include_tasks: read_prefs.yml
+    - ansible.builtin.assert:
+        that:
+          - loc_atomic is failed
+          - "'rolled back' in loc_atomic.msg"
+          - loc_atomic.updated_preferences == []
+          - not loc_atomic.changed
+          - not loc_atomic.partial
+          - prefs == prefs_before_failure
+    - name: The same request works once nothing blocks it
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [es-ES, en]
+        opac_languages: [es-ES, en]
+      register: loc_atomic_ok
+    - ansible.builtin.assert:
+        that: loc_atomic_ok.changed and loc_atomic_ok.updated_preferences | length == 2
+
+    # ------------------------------------------------------------------ interplay with initialize
+    # initialize only uses the language to pick the installer data. Once localization has enabled a
+    # different set of languages, repeating initialize must not fail: it warns and changes nothing.
+    - name: Restrict both interfaces to English
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [en]
+        opac_languages: [en]
+    - name: initialize asks for a language that is no longer enabled
+      jmz.koha.initialize:
+      args: "{{ spec | combine({'language': 'es-ES'}) }}"
+      register: init_after_loc
+    - ansible.builtin.assert:
+        that:
+          - init_after_loc is not failed
+          - not init_after_loc.changed
+          - init_after_loc.warnings | select('search', 'jmz.koha.localization') | list | length == 1
+    - name: Enable Spanish again
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [en, es-ES]
+        opac_languages: [en, es-ES]
+    - name: initialize is a no-op once the language is enabled
+      jmz.koha.initialize:
+      args: "{{ spec | combine({'language': 'es-ES'}) }}"
+      register: init_enabled
+    - ansible.builtin.assert:
+        that: not init_enabled.changed

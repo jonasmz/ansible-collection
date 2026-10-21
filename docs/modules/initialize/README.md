@@ -15,21 +15,21 @@ workers, índices, cron o servicios externos.
 - Ejecutar con `become: true`. `koha-shell` debe poder cambiar al usuario
   `<instancia>-koha`; las credenciales DB se toman de esa misma instancia a
   través de `KOHA_CONF`.
-- Antes de consultar Koha en `state: present`, el módulo lee la zona horaria y
-  el host DB declarados en `koha-conf.xml`. Si la zona IANA falta en las tablas
-  de una MariaDB local, las carga desde `tzdata` y reinicia MariaDB. Esto
-  requiere `become: true`; las bases remotas fallan con un diagnóstico claro,
-  porque el módulo no administra servidores DB externos. `state: inspect` y
-  `--check` no hacen cambios.
+- Si la instancia usa una zona horaria con nombre (`timezone` de `koha-conf.xml`),
+  las tablas de zonas horarias de MariaDB deben estar cargadas antes de inicializar:
+  ejecute [`jmz.koha.mariadb_timezone`](../mariadb_timezone/README.md). Este módulo
+  ya no las carga ni reinicia MariaDB; si Koha no puede conectar por ese motivo, el
+  error lo indica.
 - El host debe tener `/etc/koha/sites/<instancia>/koha-conf.xml`, los archivos
   originales de instalación y las APIs Perl requeridas.
 - El módulo inspecciona capacidades en ejecución y falla ante estados
   parciales; no ejecuta migraciones ni reinstala una base existente.
 - Se revisaron los fuentes oficiales de las ramas 25.11.x y 26.05.x de
-  `C4::Installer`; el entorno de desarrollo no tiene Koha instalado, por lo que
-  no se declara una versión binaria probada. Antes de producción, valide el
-  paquete exacto en un host de ensayo. APIs de onboarding también pueden variar
-  entre releases.
+  `C4::Installer`. El escenario de molecule `initialize_lifecycle`
+  (`extensions/molecule/`) ejecuta el módulo contra `koha-common 26.05.04` real:
+  inspección, instalación e idempotencia, conflictos con entidades existentes,
+  onboarding fallido y reanudado, timeout, check mode y zonas horarias. Otras
+  versiones no se han probado; valide el paquete exacto en un host de ensayo.
 
 El módulo y el helper Perl usan protocolo JSON versión 1. El action plugin copia
 el helper versionado a un directorio temporal remoto, restringe sus permisos y
@@ -39,7 +39,7 @@ el contexto y el aislamiento de la instancia.
 
 ## Estado e idempotencia
 
-`state: inspect` consulta la instancia sin modificar la base. `state: present`
+`state: inspect` consulta la instancia sin modificar la base y no acepta parámetros de onboarding. `state: present`
 es el predeterminado y realiza las fases permitidas:
 
 | Estado detectado | Comportamiento |
@@ -65,11 +65,25 @@ una diferencia falla en vez de sobrescribir datos. La contraseña no se rota
 para una cuenta existente. Para cambiarla utilice un flujo explícito de gestión
 de credenciales de Koha.
 
-El modo `--check` inspecciona el estado general y presenta un plan parcial. No
-crea esquema ni objetos ni carga SQL, pero no puede anticipar conflictos de
-atributos o reglas sin ejecutar la comparación de cada objeto; esos conflictos
-se detectan durante la ejecución normal. `--diff` expone solo el estado previo
-y posterior, nunca la contraseña.
+El modo `--check` devuelve un plan real según el estado de la instancia:
+
+- **`onboarding_required` o `initialized`:** el helper ejecuta el onboarding con las
+  APIs de Koha dentro de una transacción que siempre se revierte. Informa las
+  entidades y reglas que una ejecución real crearía (`changed`, `actions`,
+  `partial: false`) y falla ante los mismos conflictos que una ejecución real.
+  Una instancia ya inicializada con una entidad nueva declarada informa
+  `changed: true`.
+- **`uninitialized` o `schema_created`:** la instalación del esquema y de los datos
+  es DDL no transaccional y no se puede simular. Se informan las acciones previstas
+  con `partial: true` y sin verificar conflictos de entidades.
+- Estados `data_incomplete`, `inconsistent` y `upgrade_required` fallan igual que
+  en una ejecución real.
+
+El action plugin copia el helper a un directorio temporal también en check mode
+(es lo único que escribe en el host) y lo elimina al terminar; si no pudiera
+eliminarlo, lo informa en `warnings`.
+
+`--diff` expone solo el estado previo y posterior, nunca la contraseña.
 
 ## Parámetros
 
@@ -77,12 +91,12 @@ y posterior, nunca la contraseña.
 | --- | --- | --- | --- |
 | `instance` | string | sí | Identificador Koha (1–11 caracteres; minúsculas, números y guiones). |
 | `state` | string | no | `present` (predeterminado) o `inspect`. |
-| `language` | string | para `present` | Código que exista en el catálogo de idiomas instalado. |
-| `marcflavor` | string | para `present` | `MARC21` o `UNIMARC`, sin distinguir mayúsculas/minúsculas ni espacios externos; sujeto a frameworks disponibles. `marc_flavour` sigue disponible como alias. |
+| `language` | string | para `present` | Código que exista en el catálogo de idiomas instalado. Solo selecciona los datos del instalador: en una instancia ya instalada no se compara con los idiomas habilitados (los administra [`jmz.koha.localization`](../localization/README.md)) y, si no está habilitado, se emite una advertencia. |
+| `marcflavor` | string | para `present` | `marc21` o `unimarc`, como en `jmz.koha.instance`; sin distinguir mayúsculas/minúsculas ni espacios externos (Koha lo almacena en mayúsculas); sujeto a frameworks disponibles. No existe el alias `marc_flavour`. |
 | `sample_data` | lista | no | IDs opcionales `sección/archivo.sql` del catálogo de Koha; predeterminado vacío. |
 | `library` | mapa | para `present` | `code`, `name`. No se reconcilia una biblioteca existente. |
 | `patron_categories` | lista | para `present` | Categorías con `code`, `description`, `type`, `enrolment_period`, `default_privacy`. |
-| `administrator` | mapa | para `present` | `username`, `firstname`, `surname`, `cardnumber`, `library`, `category`, `password` y `email` opcional. La contraseña y el mapa se marcan `no_log`. |
+| `administrator` | mapa | para `present` | `username`, `firstname`, `surname`, `cardnumber`, `library`, `category`, `password` y `email` opcional. Solo `password` se marca `no_log`, de modo que los identificadores (código de biblioteca, usuario) siguen siendo legibles en mensajes y acciones. |
 | `item_types` | lista | para `present` | Tipos con `code` y `description`; se exige al menos uno. |
 | `circulation_rules` | lista | para `present` | Ámbito `library`/`category`/`item_type` y mapa explícito `rules`; no hay política predeterminada. |
 | `timeout` | entero | no | Timeout del helper, 1800 segundos por omisión. |
@@ -101,7 +115,7 @@ global `KohaAdminEmailAddress`.
 
 Los nombres de `circulation_rules.rules` se normalizan a minúsculas antes de
 invocar Koha, por lo que también se aceptan variantes camelCase como
-`issueLength`. El alias `maxissuesqty` se normaliza a `maxissueqty`. Antes de
+`issueLength`. Los valores deben ser texto, número o booleano; un nombre mal escrito (por ejemplo `maxissuesqty`) se rechaza como regla desconocida. No se admiten códigos de categoría o tipo repetidos ni dos entradas para el mismo ámbito. Antes de
 crear el esquema o cargar datos, el helper compara las reglas con el catálogo
 de la versión Koha instalada y rechaza nombres desconocidos sin modificar la
 base. Si una ejecución anterior ya llegó a `onboarding_required`, una nueva

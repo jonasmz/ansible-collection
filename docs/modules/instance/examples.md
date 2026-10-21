@@ -38,6 +38,11 @@ Los vhosts se generan en la configuración de la instancia sin editar
 Apache en el puerto 80. Este módulo no configura HAProxy, SMTP ni Memcached.
 
 ```yaml
+- name: Cargar las zonas horarias de MariaDB antes de crear la instancia
+  jmz.koha.mariadb_timezone:
+    timezone: America/Argentina/Buenos_Aires
+  become: true
+
 - name: Crear Koha detrás de HAProxy
   jmz.koha.instance:
     instance: biblioteca
@@ -274,7 +279,7 @@ combinación falla intencionalmente.
 
 ## Reparar una instancia parcial
 
-`repair` reconstruye la configuración de una instancia `partial`, preservando
+`repair` reconstruye la configuración de una instancia `partial` o `unmanaged`, preservando
 la base de datos con `koha-remove --keep-mysql`. Exige repetir el nombre y
 confirmar explícitamente el riesgo. Si la configuración existente no permite
 recuperar la conexión a DB, proporciona credenciales válidas.

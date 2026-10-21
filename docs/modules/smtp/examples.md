@@ -5,17 +5,16 @@
 ## STARTTLS con Vault
 
 ```yaml
-- name: Configurar SMTP con STARTTLS
+- name: Configurar SMTP con STARTTLS como predeterminado
   jmz.koha.smtp:
     instance: biblioteca
     server:
+      name: Notificaciones
       host: smtp.example.org
       port: 587
-      timeout: 120
       ssl_mode: starttls
       user_name: notificaciones@example.org
       password: "{{ vault_smtp_password }}"
-      debug: false
   become: true
   no_log: true
 ```
@@ -26,108 +25,61 @@
 - name: Configurar SMTP con SSL
   jmz.koha.smtp:
     instance: biblioteca
-    server: {host: smtp.example.org, port: 465, ssl_mode: ssl}
+    server: {name: Notificaciones, host: smtp.example.org, port: 465, ssl_mode: ssl}
   become: true
 ```
 
-## Solo dirección administrativa
+## Depuración SMTP y timeout de la conexión
+
+`debug` activa la depuración SMTP de Koha para ese servidor (por defecto `false`).
+`smtp_timeout` es el tiempo máximo, en segundos, de la conexión SMTP; no es el
+`timeout` de la tarea, que limita la llamada a `koha-shell`.
 
 ```yaml
-- name: Configurar KohaAdminEmailAddress
+- name: Configurar SMTP con depuración mientras se diagnostica
   jmz.koha.smtp:
     instance: biblioteca
-    admin_email_address: admin@example.org
+    server:
+      name: Notificaciones
+      host: smtp.example.org
+      port: 587
+      ssl_mode: starttls
+      user_name: notificaciones@example.org
+      password: "{{ vault_smtp_password }}"
+      debug: true
+      smtp_timeout: 30
   become: true
+  no_log: true
 ```
 
-## Habilitar o deshabilitar sin cambiar transporte
+Para desactivarla, repita la tarea con `debug: false` (o sin `debug`): el servidor
+se reconcilia con lo declarado.
+
+## Después de initialize
 
 ```yaml
-- name: Habilitar correo
-  jmz.koha.smtp: {instance: biblioteca, enabled: true}
+- name: Inicializar Koha
+  jmz.koha.initialize:
+    instance: biblioteca
+    # ...
   become: true
+  no_log: true
 
-- name: Deshabilitar correo
-  jmz.koha.smtp: {instance: biblioteca, enabled: false}
-  become: true
-```
-
-## Actualizar solo host y puerto
-
-```yaml
-- name: Conservar TLS y credenciales
+- name: Configurar SMTP
   jmz.koha.smtp:
     instance: biblioteca
-    server: {host: smtp.example.org, port: 587}
+    server: {name: Notificaciones, host: smtp.example.org}
   become: true
 ```
 
-## `initialize` antes de `smtp`
+## Previsualizar cambios
 
 ```yaml
-- name: Inicializar Koha y configurar correo
-  hosts: koha
-  become: true
-  tasks:
-    - name: Inicializar instancia existente
-      jmz.koha.initialize:
-        instance: biblioteca
-        language: es-ES
-        marcflavor: MARC21
-        library: {code: CENTRAL, name: Biblioteca Central}
-        patron_categories:
-          - {code: STAFF, description: Personal, type: S, enrolment_period: 1, default_privacy: default}
-          - {code: ADULT, description: Adultos, type: A, enrolment_period: 1, default_privacy: default}
-        administrator:
-          username: admin
-          firstname: Administrador
-          surname: Koha
-          cardnumber: ADMIN001
-          library: CENTRAL
-          category: STAFF
-          password: "{{ vault_koha_admin_password }}"
-        item_types: [{code: BOOK, description: Libros}]
-        circulation_rules:
-          - library: CENTRAL
-            category: ADULT
-            item_type: BOOK
-            rules: {issuelength: 14, lengthunit: days, maxissueqty: 5, renewalsallowed: 2}
-      no_log: true
-
-    - name: Configurar SMTP y correo Koha
-      jmz.koha.smtp:
-        instance: biblioteca
-        server:
-          host: smtp.example.org
-          port: 587
-          ssl_mode: starttls
-          user_name: notificaciones@example.org
-          password: "{{ vault_smtp_password }}"
-        admin_email_address: admin@example.org
-        enabled: true
-      no_log: true
-```
-
-## Check mode y ejecución idempotente
-
-```yaml
-- name: Previsualizar los cambios
+- name: Previsualizar SMTP
   jmz.koha.smtp:
     instance: biblioteca
-    server: {host: smtp.example.org, port: 587, ssl_mode: starttls}
-    enabled: true
+    server: {name: Notificaciones, host: smtp.example.org, port: 587, ssl_mode: starttls}
+  become: true
   check_mode: true
   diff: true
-  become: true
-
-- name: Repetir configuración ya aplicada (changed false)
-  jmz.koha.smtp:
-    instance: biblioteca
-    server: {host: smtp.example.org, port: 587, ssl_mode: starttls}
-    enabled: true
-  become: true
 ```
-
-El diff no incluye la contraseña. Si existe un SMTP default en la base, una
-solicitud `server` falla con el detalle de precedencia; la configuración DB
-requiere otro backend explícito.

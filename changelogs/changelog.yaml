@@ -3,8 +3,40 @@ releases:
   1.3.0:
     changes:
       minor_changes:
-        - Add the smtp module for Koha SMTP XML, outgoing email enablement and KohaAdminEmailAddress.
-        - Add secure SMTP XML updates, Koha API initialization and database-default conflict detection.
+        - Add the smtp module to add a Koha SMTP server and set it as the default without touching the packaged default.
+        - Add the translate and localization modules (translate takes name only, without the language and lang_code aliases).
+        - Add the mariadb_timezone module; instance no longer loads MariaDB timezone tables or restarts MariaDB, and the module restarts it only when restart=true and the loaded tables are not enough.
+        - Add adopt to instance to register an existing complete instance without rebuilding it.
+        - Rebuild (repair/reconfigure) now backs up and, on failure, restores the instance configuration, reports partial progress, and instance serializes runs with a lock.
+        - initialize, smtp and localization now work in check mode (their action plugins share one helper-staging base), and initialize check mode reports the entities a real run would create.
+        - instance state=absent can now remove a partial instance whose /etc/koha/sites directory is gone.
+        - initialize validates duplicate codes and circulation rule scopes, restricts rule values to scalars, counts superlibrarians in SQL, compares numeric rule values numerically, and reports scrubbed helper stderr when the helper does not answer.
+        - translate runs koha-translate with a timeout, marks any failed or killed mutation as partial, and returns its output with invalid UTF-8 replaced (installing fr-FR used to fail the task although it installed).
+        - localization writes its preferences in one transaction (all or nothing), holds a per-instance lock, drops its no-op state parameter, and translate shares the same lock helper with a bounded wait.
+        - initialize only warns when its language is not enabled on an already installed instance instead of failing, so repeating it after localization no longer breaks.
+        - localization applies selector positions again (they were rejected on every real database), plans before writing, and explains a killed run by reporting which preferences landed.
+        - plack, zebra, zebra_indexer, worker and zebra_rebuild now share module_utils/koha_service (instance check, per-instance lock that waits up to 30 seconds, command timeout, status parsing and one result shape with previous_state, state, actions, planned and diagnostics).
+        - plack no longer returns rc, which made Ansible fail status and repeated stop on a stopped Plack, and reports changed when enable succeeded but start failed.
+        - plack checks the Apache headers and proxy_http modules before enabling or starting Plack, returns apache_reload_required when enabled changed, and can reload Apache itself with reload_apache.
+        - zebra and zebra_indexer recognise "not running" from the real koha-zebra and koha-indexer status output (stop reported failure, and start did nothing on a stopped service).
+        - worker handles each queue separately, accepts omitting state, and returns workers with previous_state, state and changed per queue.
+        - zebra_rebuild counts a quiet run (exit 0, no output) as completed, only treats the words error, failed and warning as failures when the command exited nonzero, and returns work_skipped instead of skipped so Ansible does not show the task as SKIPPED.
+        - The documentation of the five service modules is in Spanish and parses with ansible-doc (worker and zebra_rebuild did not).
+        - Add the services_lifecycle molecule scenario that runs plack, zebra, zebra_indexer, worker and zebra_rebuild against real Koha.
+        - smtp holds a per-instance lock while it writes (smtp_servers has no unique index on name), reports changed when Koha was already committed and a later check failed, shows a password change in after.password as "modificada" without revealing it, and returns Koha errors in Spanish without the helper path.
+        - Add the smtp_lifecycle molecule scenario that runs smtp against real Koha, including get_default, the lock and koha-conf.xml staying untouched.
+      breaking_changes:
+        - translate no longer accepts dev_instance and no longer returns scope or dev_instance; it never worked on a real koha-conf.xml.
+        - initialize no longer loads MariaDB timezone tables or restarts MariaDB (that code never matched a real koha-conf.xml); run mariadb_timezone first.
+        - initialize marcflavor takes marc21/unimarc like instance (any case still works); the marc_flavour and maxissuesqty aliases are removed.
+        - initialize only masks administrator.password in output, no longer every administrator value.
+        - instance no longer accepts the name and confirm_name aliases and no longer returns name; use instance and confirm_instance.
+        - smtp renames server.timeout to server.smtp_timeout (the Koha column is timeout) so it is not confused with the koha-shell timeout.
+        - zebra, zebra_indexer and worker no longer accept enabled; Debian Koha packages have no per-instance units, so it always failed (koha-common starts existing instances at boot).
+        - zebra, zebra_indexer and zebra_rebuild no longer accept command_path, and worker no longer accepts the name alias nor returns name or state.
+        - zebra and zebra_indexer state defaults to status and they no longer return backend, enabled, enablement_state or planned_actions (check mode lists the operations in actions with planned true).
+        - zebra_rebuild returns work_skipped instead of skipped.
+        - instance state markers use schema_version 2; instances created by earlier builds must be registered again with adopt.
   1.0.0:
     changes:
       release_summary: Initial release.

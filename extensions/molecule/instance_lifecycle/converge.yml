@@ -1,0 +1,15 @@
+---
+- name: Create the instance (also run by the idempotence check)
+  hosts: all
+  become: true
+  tasks:
+    - name: Create instance
+      jmz.koha.instance:
+        instance: "{{ koha_instance }}"
+        db_mode: create
+        marcflavor: marc21
+        zebralang: en
+        vhosts:
+          domain: ".{{ koha_domain }}"
+          opac_suffix: -opac
+          staff_suffix: -staff

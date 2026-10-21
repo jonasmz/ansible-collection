@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: MIT-0
 #!/usr/bin/python
+# SPDX-License-Identifier: MIT-0
 """Create Koha instances using the packaged koha-create command."""
 
 DOCUMENTATION = r'''
@@ -8,6 +8,7 @@ module: instance
 short_description: Crea de forma declarativa una instancia Koha
 description:
   - Ejecuta koha-create solo cuando la instancia está ausente o en etapa request.
+  - Registra un marcador propio al terminar; una instancia completa sin marcador solo se administra con I(adopt) o I(repair).
   - Usa un archivo configfile temporal privado para evitar el límite de argumentos y proteger secretos de RabbitMQ.
   - La compatibilidad de opciones depende de la versión instalada de koha-create.
 version_added: "1.0.0"
@@ -17,7 +18,6 @@ options:
     description: Nombre Unix/DNS de la instancia; 1-11 caracteres.
     type: str
     required: true
-    aliases: [name]
   state:
     description: present crea/configura; absent elimina archivos con doble confirmacion.
     type: str
@@ -85,7 +85,7 @@ options:
     description: Mapea --template-cache-dir; default nativo /var/cache/koha/<instance>/templates.
     type: path
   timezone:
-    description: Mapea --timezone. Para zonas IANA en MariaDB local, asegura automáticamente las tablas de zonas horarias antes de crear/configurar la instancia.
+    description: Mapea --timezone. Las tablas de zonas horarias de MariaDB no se cargan aquí; use M(jmz.koha.mariadb_timezone) antes de crear la instancia.
     type: str
   upload_path:
     description: Mapea --upload-path; default nativo /var/lib/koha/<instance>/uploads.
@@ -122,9 +122,15 @@ options:
   confirm_instance:
     description: Debe repetir instance exactamente para operaciones destructivas.
     type: str
-    aliases: [confirm_name]
   confirm_data_loss:
     description: Segunda confirmacion explicita requerida para operaciones destructivas.
+    type: bool
+    default: false
+  adopt:
+    description:
+      - Registra el marcador de una instancia Koha completa que no lo tiene (creada a mano o por otra herramienta), sin modificarla.
+      - No verifica que su configuración real coincida con los parámetros; estos pasan a ser la referencia para detectar drift.
+      - No hace nada si la instancia ya está administrada y falla si está incompleta.
     type: bool
     default: false
   repair:
@@ -140,14 +146,17 @@ options:
     type: list
     elements: str
   vhosts:
-    description: Overrides de DOMAIN/OPACPORT/OPACPREFIX/OPACSUFFIX/INTRAPORT/INTRAPREFIX/INTRASUFFIX.
+    description:
+      - Overrides de DOMAIN/OPACPORT/OPACPREFIX/OPACSUFFIX/INTRAPORT/INTRAPREFIX/INTRASUFFIX. Si se omite por completo, Koha usa C(/etc/koha/koha-sites.conf).
+      - Al declararlo, solo C(domain) es obligatorio. Los prefijos y sufijos omitidos los resuelve C(koha-create) con C(koha-sites.conf).
+      - Un puerto omitido no hereda de C(koha-sites.conf) sino que vale 80, porque C(koha-create) puede generar un VirtualHost inválido (C(*:None)) si falta.
     type: dict
     options:
-      domain: {description: Sufijo común de dominio Koha, por ejemplo .example.org., type: str}
-      opac_port: {description: Puerto configurado para el VirtualHost OPAC., type: int}
+      domain: {description: "Sufijo común de dominio Koha, por ejemplo .example.org. Obligatorio.", type: str, required: true}
+      opac_port: {description: "Puerto del VirtualHost OPAC. Si se omite, 80.", type: int}
       opac_prefix: {description: Prefijo agregado al nombre de host OPAC., type: str}
       opac_suffix: {description: Sufijo agregado al nombre de host OPAC., type: str}
-      staff_port: {description: Puerto configurado para el VirtualHost de personal., type: int}
+      staff_port: {description: "Puerto del VirtualHost de personal. Si se omite, 80.", type: int}
       staff_prefix: {description: Prefijo agregado al nombre de host de personal., type: str}
       staff_suffix: {description: Sufijo agregado al nombre de host de personal., type: str}
   db_request_path:
@@ -241,7 +250,6 @@ EXAMPLES = r'''
 
 RETURN = r'''
 instance: {description: Nombre de instancia validado, returned: always, type: str}
-name: {description: Alias legado de instance, returned: always, type: str}
 state: {description: Estado inspeccionado o previsto, returned: always, type: str, sample: present}
 db_mode: {description: Modo utilizado, returned: always, type: str}
 config_path: {description: Ruta esperada del koha-conf.xml, returned: always, type: str}
@@ -253,23 +261,27 @@ actions: {description: Acciones planeadas o ejecutadas, returned: always, type: 
 notices: {description: Notas informativas o de compatibilidad; nunca incluyen secretos., returned: always, type: list}
 '''
 
-import hashlib
-import json
 import os
-import re
 import shutil
 import tempfile
-import xml.etree.ElementTree as ET
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import (
-    ModuleInputError, build_argv, choice_normalizer, db_password_is_safe, ensure_mariadb_timezone, inspect_state, render_config, validate_params,
+    ModuleInputError, build_argv, choice_normalizer, render_config, validate_params,
+)
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance_backend import (
+    backup_instance, check_apache_prerequisites, check_letsencrypt, existing_db_credentials, failure_hint,
+    read_passwd_record, require_options, resolve_binary, restore_site_config, vhost_hostnames, write_private, BACKUP_ROOT,
+)
+from ansible_collections.jmz.koha.plugins.module_utils.koha_instance_state import (
+    fingerprint, inspect_state, instance_lock, remove_marker, write_marker,
 )
 
 
+DB_MODES = ["create", "request", "populate", "use"]
 ARGUMENT_SPEC = {
-    "instance": {"type": "str", "required": True, "aliases": ["name"]}, "state": {"type": choice_normalizer(["present", "absent"]), "default": "present", "choices": ["present", "absent"]},
-    "db_mode": {"type": choice_normalizer(["create", "request", "populate", "use"]), "default": "create", "choices": ["create", "request", "populate", "use"]},
+    "instance": {"type": "str", "required": True}, "state": {"type": choice_normalizer(["present", "absent"]), "default": "present", "choices": ["present", "absent"]},
+    "db_mode": {"type": choice_normalizer(DB_MODES), "default": "create", "choices": DB_MODES},
     "marcflavor": {"type": choice_normalizer(["marc21", "unimarc"]), "choices": ["marc21", "unimarc"]},
     "zebralang": {"type": choice_normalizer(["cs", "el", "en", "es", "fr", "nb", "ru", "uk"]), "choices": ["cs", "el", "en", "es", "fr", "nb", "ru", "uk"]},
     "elasticsearch_server": {"type": "str"}, "memcached_servers": {"type": "list", "elements": "str"},
@@ -284,409 +296,274 @@ ARGUMENT_SPEC = {
     "db_credentials": {"type": "dict", "no_log": True, "options": {"username": {"type": "str", "required": True}, "password": {"type": "str", "required": True, "no_log": True}}},
     "letsencrypt": {"type": "bool", "default": False}, "tls_termination": {"type": choice_normalizer(["local", "proxy"]), "choices": ["local", "proxy"]},
     "remove_database": {"type": "bool", "default": False}, "purge_data": {"type": "bool", "default": False},
-    "confirm_instance": {"type": "str", "aliases": ["confirm_name"]}, "confirm_data_loss": {"type": "bool", "default": False},
-    "repair": {"type": "bool", "default": False}, "reconfigure": {"type": "bool", "default": False},
+    "confirm_instance": {"type": "str"}, "confirm_data_loss": {"type": "bool", "default": False},
+    "adopt": {"type": "bool", "default": False}, "repair": {"type": "bool", "default": False}, "reconfigure": {"type": "bool", "default": False},
     "keep_cookies": {"type": "list", "elements": "str"},
-    "vhosts": {"type": "dict", "options": {"domain": {"type": "str"}, "opac_port": {"type": "int"}, "opac_prefix": {"type": "str"}, "opac_suffix": {"type": "str"}, "staff_port": {"type": "int"}, "staff_prefix": {"type": "str"}, "staff_suffix": {"type": "str"}}},
+    "vhosts": {"type": "dict", "options": {"domain": {"type": "str", "required": True}, "opac_port": {"type": "int"}, "opac_prefix": {"type": "str"}, "opac_suffix": {"type": "str"}, "staff_port": {"type": "int"}, "staff_prefix": {"type": "str"}, "staff_suffix": {"type": "str"}}},
     "db_request_path": {"type": "path"}, "koha_create_path": {"type": "path"}, "koha_remove_path": {"type": "path"},
 }
+REBUILD_ACTIONS = ["koha-remove --keep-mysql", "koha-create --use-db"]
 
 
-def _safe_fingerprint(p):
-    def clean(value):
-        if isinstance(value, dict):
-            return {k: clean(v) for k, v in value.items() if k not in ("password", "db_credentials")}
-        if isinstance(value, list):
-            return [clean(v) for v in value]
-        return value
-    persistent = {k: v for k, v in p.items() if k not in ("instance", "name", "confirm_instance", "confirm_name", "confirm_data_loss", "repair", "reconfigure", "remove_database", "purge_data")}
-    persistent["name"] = p.get("instance", p.get("name"))
-    return hashlib.sha256(json.dumps(clean(persistent), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+def plan_action(p, detected, marker):
+    """Decide the single operation to run: noop, adopt, remove, rebuild or a db_mode.
+
+    Pure function of the parameters and the inspected state, shared by check
+    mode and real runs so both always agree.
+    """
+    mode = p["db_mode"]
+    if p["state"] == "absent":
+        if detected == "absent":
+            return "noop"
+        if p.get("confirm_instance") != p["instance"] or not p.get("confirm_data_loss"):
+            raise ModuleInputError("state=absent elimina archivos y servicios; confirme con confirm_instance=instance y confirm_data_loss=true")
+        return "remove"
+    if p["adopt"]:
+        if detected == "present":
+            return "noop"
+        if detected == "unmanaged":
+            return "adopt"
+        raise ModuleInputError("adopt requiere una instancia completa sin marcador; estado detectado: %s" % detected)
+    if mode == "populate":
+        if detected != "requested":
+            raise ModuleInputError("populate requiere estado requested coherente (config Koha, Apache, directorio y marcador de solicitud); estado detectado: %s" % detected)
+    elif detected == "requested":
+        raise ModuleInputError("la instancia está requested; use db_mode=populate tras preparar la base externa")
+    if detected == "present":
+        if p["repair"]:
+            raise ModuleInputError("repair solo se aplica a instancias incompletas o no administradas; use reconfigure=true para cambiar configuración present")
+        if marker.get("fingerprint") == fingerprint(p):
+            return "noop"
+        if not p["reconfigure"]:
+            raise ModuleInputError("la instancia existe con parámetros distintos (drift); use reconfigure=true junto con las dos confirmaciones para reconstruir su configuración preservando la DB")
+        return "rebuild"
+    if detected in ("partial", "unmanaged"):
+        if p["repair"]:
+            return "rebuild"
+        if detected == "unmanaged":
+            raise ModuleInputError("la instancia está completa pero no la administra este módulo (sin marcador); use adopt=true para registrarla sin modificarla, o repair=true y las dos confirmaciones para reconstruirla")
+        raise ModuleInputError("recursos parciales detectados; use repair=true y las dos confirmaciones para reconstruir la configuración preservando la DB")
+    if p["repair"] or p["reconfigure"]:
+        raise ModuleInputError("repair requiere una instancia incompleta o no administrada y reconfigure requiere una instancia present")
+    return mode
 
 
-def _find_binary(explicit):
-    candidates = [explicit] if explicit else ["/usr/sbin/koha-create", "/usr/bin/koha-create"]
-    for candidate in candidates:
-        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return shutil.which("koha-create") if not explicit else None
+class Context:
+    """Paths and identifiers of one instance."""
+
+    def __init__(self, p):
+        self.name = p["instance"]
+        self.config_path = "/etc/koha/sites/%s/koha-conf.xml" % self.name
+        self.apache_path = "/etc/apache2/sites-available/%s.conf" % self.name
+        self.state_dir = "/var/lib/koha/%s" % self.name
+        self.marker_path = os.path.join(self.state_dir, ".ansible-koha-instance-state")
+        self.request_path = p.get("db_request_path") or os.path.join(self.state_dir, "%s-db-request.txt" % self.name)
 
 
-def _write_private(path, content):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        stream.write(content)
-    os.chmod(path, 0o600)
+def _result(ctx, p, action, state, actions, notices, changed=True):
+    result = {"changed": changed, "instance": ctx.name, "state": state, "db_mode": p["db_mode"],
+              "config_path": ctx.config_path, "apache_site_path": ctx.apache_path,
+              "actions": actions, "notices": notices}
+    if p.get("vhosts") and state != "absent":
+        result["opac_hostname"], result["staff_hostname"] = vhost_hostnames(ctx.name, p["vhosts"])
+    if action == "request":
+        result["request_file"] = ctx.request_path
+    return result
 
 
-def _existing_db_credentials(config_path, name, credentials=None):
-    """Read the DB record from Koha config, preferring explicitly supplied secrets."""
-    root = ET.parse(config_path).getroot()
-    # koha-conf.xml contains several unrelated <config> nodes inside its
-    # embedded YAZ server definitions. The DB settings live in the Koha-level
-    # config block, identified by its database/user/pass children.
-    configs = [node for node in root.iter("config")
-               if all(node.find(tag) is not None for tag in ("database", "user", "pass"))]
-    if len(configs) != 1:
-        raise ModuleInputError("koha-conf.xml no contiene un único bloque config con datos DB")
-    config = configs[0]
-
-    def value(tag):
-        node = config.find(tag)
-        return (node.text or "").strip() if node is not None else ""
-
-    supplied = credentials or {}
-    username = supplied.get("username") or value("user")
-    password = supplied.get("password") or value("pass")
-    database = value("database")
-    host = value("hostname") or "localhost"
-    if (not all((username, password, database)) or any("\n" in x or ":" in x for x in (username, password, database, host))
-            or not re.fullmatch(r"[A-Za-z0-9_]{1,32}", username)
-            or not db_password_is_safe(password)
-            or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", database)
-            or not re.fullmatch(r"[A-Za-z0-9_.:\[\]-]+", host)):
-        raise ModuleInputError("no se pudieron recuperar credenciales DB seguras del koha-conf.xml; proporcione db_credentials/passwdfile")
-    return "%s:%s:%s:%s:%s\n" % (name, username, password, database, host)
+def _plan_result(ctx, p, action, detected):
+    if action == "noop":
+        if p["state"] == "absent":
+            return _result(ctx, p, action, "absent", [], [], changed=False)
+        return _result(ctx, p, action, detected, [], ["La instancia está creada; koha-create no se ejecutó."], changed=False)
+    if action == "remove":
+        return _result(ctx, p, action, "absent", ["ejecutar koha-remove"],
+                       ["Plan previsto; preserve DB por defecto. remove_database/purge_data amplían el borrado."])
+    if action == "adopt":
+        return _result(ctx, p, action, "present", ["registrar marcador de instancia"],
+                       ["La instancia no se modifica; solo se registra su marcador."])
+    if action == "rebuild":
+        result = _result(ctx, p, action, "present", list(REBUILD_ACTIONS),
+                         ["Plan previsto; no se verificó que Apache/DB permitan completar la operación."])
+        result["db_mode"] = "use"
+        return result
+    return _result(ctx, p, action, "requested" if action == "request" else "present",
+                   ["ejecutar koha-create en modo %s" % action],
+                   ["Plan previsto; no se verificó que Apache/DB permitan completar la operación."])
 
 
-def _read_passwd_record(path, name):
-    """Read and validate only the requested passwdfile row; never report contents."""
-    try:
-        with open(path, encoding="utf-8") as stream:
-            rows = [line.rstrip("\r\n").split(":") for line in stream if line.startswith(name + ":")]
-    except OSError as exc:
-        raise ModuleInputError("no se pudo leer passwdfile (%s)" % exc.__class__.__name__)
-    if len(rows) != 1 or len(rows[0]) != 5:
-        raise ModuleInputError("passwdfile debe tener exactamente una fila Koha para la instancia solicitada con cinco campos")
-    instance, username, password, database, host = rows[0]
-    if (instance != name or not re.fullmatch(r"[A-Za-z0-9_]{1,32}", username)
-            or not db_password_is_safe(password)
-            or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", database)
-            or not re.fullmatch(r"[A-Za-z0-9_.:\[\]-]+", host)):
-        raise ModuleInputError("passwdfile contiene valores no soportados de forma segura por koha-create")
-    return rows[0]
+def _require_root(what):
+    if os.geteuid() != 0:
+        raise ModuleInputError("%s requiere root; ejecute la tarea con become: true" % what)
 
 
-def _check_letsencrypt(module):
-    if not shutil.which("letsencrypt"):
-        raise ModuleInputError("letsencrypt=true requiere el ejecutable letsencrypt; instale/configure el cliente antes de ejecutar el módulo")
-    rc, out, err = module.run_command(["dpkg-query", "-W", "-f=${Status}", "letsencrypt"], check_rc=False)
-    if rc or "install ok installed" not in out:
-        raise ModuleInputError("letsencrypt=true requiere que el paquete Debian letsencrypt ya esté instalado; el módulo no instala paquetes ni acepta prompts")
-    apache = "/usr/sbin/apachectl" if os.path.exists("/usr/sbin/apachectl") else "/usr/sbin/apache2ctl"
-    rc, out, err = module.run_command([apache, "-M"], check_rc=False)
-    if rc or "ssl_module" not in out:
-        raise ModuleInputError("letsencrypt=true requiere mod_ssl habilitado en Apache (a2enmod ssl)")
-
-
-def _check_apache_prerequisites(module):
-    """Fail before koha-create mutates the host if Koha's Apache modules are absent."""
-    apache = "/usr/sbin/apachectl" if os.path.exists("/usr/sbin/apachectl") else "/usr/sbin/apache2ctl"
-    rc, out, err = module.run_command([apache, "-M"], check_rc=False)
-    modules = out + err
+def _apply_remove(module, p, ctx, actions):
+    remove_binary = resolve_binary(module, p.get("koha_remove_path"), "koha-remove")
+    site_dir = "/etc/koha/sites/%s" % ctx.name
+    if not os.path.isdir(site_dir):
+        # koha-remove aborts without this directory, which would leave the user, Apache site
+        # and services of a partial instance behind. It deletes the directory again when empty.
+        os.mkdir(site_dir, 0o755)
+        actions.append("crear directorio de sitio vacío para koha-remove")
+    argv = [remove_binary] + ([] if p["remove_database"] else ["--keep-mysql"]) + (["--purge-all"] if p["purge_data"] else []) + [ctx.name]
+    rc, _, _ = module.run_command(argv, check_rc=False)
     if rc:
-        raise ModuleInputError("no se pudo comprobar Apache antes de crear la instancia; revise apachectl -M y su configuración")
-    if "mpm_itk_module" not in modules:
-        raise ModuleInputError("Koha requiere mpm_itk habilitado en Apache; instale libapache2-mpm-itk y ejecute a2enmod mpm_itk")
-    if "rewrite_module" not in modules:
-        raise ModuleInputError("Koha requiere mod_rewrite habilitado en Apache; ejecute a2enmod rewrite y recargue Apache")
-    if "cgi_module" not in modules:
-        raise ModuleInputError("Koha requiere mod_cgi habilitado en Apache; ejecute a2enmod cgi y recargue Apache")
+        raise ModuleInputError("koha-remove falló (rc=%s); stdout/stderr se omitieron por seguridad" % rc)
+    actions.append("koha-remove")
+    remove_marker(ctx.marker_path)
+    notices = []
+    if not p["remove_database"]:
+        notices.append("La base de datos se conservó.")
+    elif p.get("database") and p["database"] != "koha_%s" % ctx.name:
+        notices.append("koha-remove elimina su DB convencional koha_<instance>; revise manualmente la DB personalizada %s." % p["database"])
+    if not p["purge_data"]:
+        notices.append("/var/lib/koha y uploads se conservaron; use purge_data=true si desea borrarlos.")
+    return _result(ctx, p, "remove", "absent", actions, notices)
 
 
-def _safe_backend_failure_hint(output):
-    """Map common backend errors to fixed, non-sensitive diagnostics."""
-    if re.search(r"mpm_itk", output, re.IGNORECASE):
-        return "Koha requiere mpm_itk habilitado en Apache."
-    if re.search(r"mod_rewrite|rewrite_module", output, re.IGNORECASE):
-        return "Koha requiere mod_rewrite habilitado en Apache."
-    if re.search(r"mod_cgi|cgi_module", output, re.IGNORECASE):
-        return "Koha requiere mod_cgi habilitado en Apache."
-    if re.search(r"ERROR\s+1045|access denied", output, re.IGNORECASE):
-        return "MariaDB rechazó la autenticación; revise su configuración local sin compartir credenciales."
-    if re.search(r"ERROR\s+1044|command denied", output, re.IGNORECASE):
-        return "MariaDB rechazó los privilegios requeridos para crear la base de datos."
-    if re.search(r"ERROR\s+1007|database exists", output, re.IGNORECASE):
-        return "La base de datos convencional ya existe; inspecciónela antes de continuar."
-    if re.search(r"ERROR\s+2002|ERROR\s+2003|can't connect to.*server", output, re.IGNORECASE):
-        return "No se pudo conectar con MariaDB; revise que el servicio esté activo."
-    if re.search(r"can't locate .*\.pm|module .* not found", output, re.IGNORECASE):
-        return "Falta una dependencia Perl de Koha en el host."
-    if re.search(r"command not found|no such file or directory", output, re.IGNORECASE):
-        return "Falta un ejecutable o archivo requerido por Koha."
-    if re.search(r"permission denied|operation not permitted", output, re.IGNORECASE):
-        return "Koha encontró un problema de permisos en el host."
-    return "Revise los servicios y dependencias del host; la salida del backend se omitió por seguridad."
+def _apply_adopt(p, ctx, actions):
+    write_marker(ctx.marker_path, "present", fingerprint(p))
+    actions.append("registrar marcador de instancia")
+    return _result(ctx, p, "adopt", "present", actions, ["La instancia no se modificó; se registró su marcador."])
 
 
-def _vhost_hostnames(name, vhosts):
-    """Build reported hostnames while treating omitted nested options as empty."""
-    domain = vhosts["domain"].lstrip(".")
-    opac = "%s%s%s.%s" % (vhosts.get("opac_prefix") or "", name, vhosts.get("opac_suffix") or "", domain)
-    staff = "%s%s%s.%s" % (vhosts.get("staff_prefix") or "", name, vhosts.get("staff_suffix") or "", domain)
-    return opac, staff
+def _prepare_passwdfile(p, ctx, tmpdir, rebuild):
+    """Resolve the passwdfile koha-create receives and validate it against the live instance."""
+    existing = None
+    if rebuild and os.path.isfile(ctx.config_path):
+        existing = existing_db_credentials(ctx.config_path, ctx.name, p.get("db_credentials")).strip().split(":")
+        if p.get("database") and p["database"] != existing[3]:
+            raise ModuleInputError("reconfigure no cambia de base de datos; database debe coincidir con la instancia actual")
+        if p.get("dbhost") and p["dbhost"] != existing[4]:
+            raise ModuleInputError("reconfigure no migra bases de datos; dbhost debe coincidir con la instancia actual")
+    supplied = read_passwd_record(p["passwdfile"], ctx.name) if p.get("passwdfile") else None
+    if p.get("db_credentials"):
+        if rebuild and not existing and not p.get("database"):
+            raise ModuleInputError("repair sin koha-conf.xml requiere database para identificar la DB que se conservará")
+        passwdfile = os.path.join(tmpdir, "passwd")
+        record = [ctx.name, p["db_credentials"]["username"], p["db_credentials"]["password"],
+                  existing[3] if existing else (p.get("database") or "koha_%s" % ctx.name),
+                  existing[4] if existing else (p.get("dbhost") or "localhost")]
+        write_private(passwdfile, ":".join(record) + "\n")
+        return passwdfile
+    if rebuild and p.get("passwdfile"):
+        if existing and (supplied[3], supplied[4]) != (existing[3], existing[4]):
+            raise ModuleInputError("passwdfile apunta a una DB/host distintos; repair/reconfigure preserva la DB actual")
+        return p["passwdfile"]
+    if rebuild and existing:
+        passwdfile = os.path.join(tmpdir, "passwd")
+        write_private(passwdfile, ":".join(existing) + "\n")
+        return passwdfile
+    if rebuild:
+        raise ModuleInputError("para reparar/reconfigurar sin koha-conf.xml debe proporcionar db_credentials o passwdfile")
+    return None
+
+
+def _apply_build(module, p, ctx, action, actions):
+    """Run koha-create for create/request/populate/use, or koha-remove + koha-create for a rebuild."""
+    rebuild = action == "rebuild"
+    mode = p["db_mode"]
+    backend_mode = "use" if rebuild else action
+    create_binary = resolve_binary(module, p.get("koha_create_path"), "koha-create")
+    remove_binary = resolve_binary(module, p.get("koha_remove_path"), "koha-remove") if rebuild else None
+    for key in ("configfile", "passwdfile"):
+        if p.get(key) and not os.path.isfile(p[key]):
+            raise ModuleInputError("%s no existe en el nodo remoto" % key)
+    if rebuild and not os.path.isdir("/etc/koha/sites/%s" % ctx.name):
+        raise ModuleInputError("la reconstrucción requiere el directorio /etc/koha/sites/%s; no se eliminará parcialmente el resto del sistema" % ctx.name)
+    if rebuild and not os.path.isdir(BACKUP_ROOT):
+        raise ModuleInputError("la reconstrucción requiere %s para respaldar la configuración actual" % BACKUP_ROOT)
+    check_apache_prerequisites(module)
+    if p["letsencrypt"]:
+        check_letsencrypt(module)
+    require_options(module, create_binary, p, backend_mode, rebuild)
+
+    tmpdir = tempfile.mkdtemp(prefix="ansible-koha-create-")
+    os.chmod(tmpdir, 0o700)
+    backup = None
+    try:
+        passwdfile = _prepare_passwdfile(p, ctx, tmpdir, rebuild)
+        cfg = os.path.join(tmpdir, "koha-create.conf")
+        write_private(cfg, render_config(p, passwdfile))
+        argv = build_argv(create_binary, backend_mode, cfg, ctx.name)
+        if mode == "request" and not rebuild and not os.path.isdir(os.path.dirname(ctx.request_path)):
+            raise ModuleInputError("el directorio padre de db_request_path debe existir")
+        if rebuild:
+            backup = backup_instance(ctx.name)
+            rc, _, _ = module.run_command([remove_binary, "--keep-mysql", ctx.name], check_rc=False)
+            if rc:
+                raise ModuleInputError("koha-remove --keep-mysql falló (rc=%s); stdout/stderr se omitieron por seguridad. Respaldo de la configuración: %s" % (rc, backup))
+            actions.append(REBUILD_ACTIONS[0])
+            remove_marker(ctx.marker_path)
+        # koha-create writes NAME-db-request.txt to cwd; a private cwd keeps it
+        # from being exposed while it is being generated.
+        rc, out, err = module.run_command(argv, cwd=tmpdir, check_rc=False)
+        generated = os.path.join(tmpdir, "%s-db-request.txt" % ctx.name)
+        if rc == 0 and action == "request" and os.path.isfile(generated):
+            os.replace(generated, ctx.request_path)
+            os.chmod(ctx.request_path, 0o600)
+        if rc != 0:
+            message = "koha-create falló (rc=%s). %s" % (rc, failure_hint(out + "\n" + err))
+            if backup:
+                restored = restore_site_config(ctx.name, backup)
+                actions.append("restaurar configuración previa")
+                message += (" La configuración anterior se restauró en /etc/koha/sites/%s (la instancia queda partial: sin usuario ni sitio Apache); "
+                            "corrija el problema y repita con repair=true." % ctx.name if restored else
+                            " La instancia quedó sin configuración.")
+                message += " Respaldo conservado en %s." % backup
+            raise ModuleInputError(message)
+        actions.append(REBUILD_ACTIONS[1] if rebuild else "koha-create --%s" % action)
+        final_state = "requested" if action == "request" else "present"
+        # Only mark success if the expected resource set really appeared.
+        _, found, _ = inspect_state(ctx.name, ctx.marker_path, ctx.request_path)
+        missing = [k for k in ("config", "apache", "site_dir", "user", "group") if not found.get(k)]
+        if missing:
+            raise ModuleInputError("koha-create terminó sin error pero faltan recursos esperados (%s); estado parcial, no se reintentará automáticamente" % ", ".join(missing))
+        write_marker(ctx.marker_path, final_state, fingerprint(p), ctx.request_path if action == "request" else None)
+        if backup:
+            shutil.rmtree(backup, ignore_errors=True)
+        notices = ["Se reconstruyeron configuración y servicios; DB y /var/lib/koha se conservaron."] if rebuild else []
+        if p["letsencrypt"]:
+            notices.append("Let's Encrypt local modifica Apache y solicita certificados; los DNS deben resolver públicamente y el puerto 80 debe llegar a este host.")
+        result = _result(ctx, p, action, final_state, actions, notices)
+        if rebuild:
+            result["db_mode"] = "use"
+        return result
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def main():
     module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
     p = module.params
-    name = p.get("instance", p.get("name"))
-    mode = p["db_mode"]
-    config_path = "/etc/koha/sites/%s/koha-conf.xml" % name
-    apache_path = "/etc/apache2/sites-available/%s.conf" % name
-    state_dir = "/var/lib/koha/%s" % name
-    marker_path = os.path.join(state_dir, ".ansible-koha-instance-state")
-    request_path = p.get("db_request_path") or os.path.join(state_dir, "%s-db-request.txt" % name)
-    timezone_changed = False
+    name = p["instance"]
+    ctx = Context(p)
+    actions = []
     try:
         validate_params(p)
-        if p.get("vhosts"):
-            v = p["vhosts"]
-            if "domain" not in v or not re.fullmatch(r"\.?[A-Za-z0-9.-]+", v["domain"]):
-                raise ModuleInputError("vhosts.domain es obligatorio y solo admite sufijo DNS opcional con punto inicial")
-            for key in ("opac_prefix", "opac_suffix", "staff_prefix", "staff_suffix"):
-                if v.get(key) and not re.fullmatch(r"[A-Za-z0-9-]*", v[key]):
-                    raise ModuleInputError("vhosts.%s solo admite caracteres DNS seguros" % key)
-            for key in ("opac_port", "staff_port"):
-                if v.get(key) is not None and not 1 <= v[key] <= 65535:
-                    raise ModuleInputError("vhosts.%s debe estar entre 1 y 65535" % key)
-        if p.get("keep_cookies") and not all(re.fullmatch(r"[A-Za-z0-9_-]+", x) for x in p["keep_cookies"]):
-            raise ModuleInputError("keep_cookies solo admite nombres de cookie alfanuméricos, _ y -")
-        if p.get("db_credentials"):
-            creds = p["db_credentials"]
-            if not creds["username"] or not creds["password"] or any(c in creds["username"] + creds["password"] for c in ":\r\n"):
-                raise ModuleInputError("db_credentials requiere username/password sin dos puntos ni saltos de línea (formato passwdfile Koha)")
-            if not re.fullmatch(r"[A-Za-z0-9_]{1,32}", creds["username"]) or not db_password_is_safe(creds["password"]):
-                raise ModuleInputError("db_credentials requiere username [A-Za-z0-9_]{1,32}; password de 1-128 caracteres ASCII imprimibles sin espacios. Por seguridad de koha-create no se admiten : ' & / \\ < >")
-        if mode == "request" and os.path.exists(request_path):
+        if p["db_mode"] == "request" and os.path.exists(ctx.request_path):
             raise ModuleInputError("db_request_path ya existe; se conserva para no sobrescribir una solicitud con credenciales")
-        if mode == "populate" and not p.get("db_request_path"):
-            try:
-                with open(marker_path, encoding="utf-8") as f:
-                    prior_marker = json.load(f)
-                request_path = prior_marker.get("request_file", request_path)
-            except (OSError, ValueError):
-                pass
-        detected, paths, marker = inspect_state(name, marker_path, request_path)
-        rebuild = False
-        if p["state"] == "absent":
-            if detected == "absent":
-            module.exit_json(changed=False, instance=name, name=name, state="absent", actions=[], notices=["No quedan archivos de instancia activos; los datos residuales de /var/lib/koha se conservan."] if paths.get("site_dir") else [])
-            if p.get("confirm_instance", p.get("confirm_name")) != name or not p.get("confirm_data_loss"):
-                raise ModuleInputError("state=absent elimina archivos y servicios; confirme con confirm_instance=instance y confirm_data_loss=true")
-            if module.check_mode:
-                module.exit_json(changed=True, instance=name, name=name, state="absent", actions=["ejecutar koha-remove"], notices=["Plan previsto; preserve DB por defecto. remove_database/purge_data amplían el borrado."])
-            if os.geteuid() != 0:
-                raise ModuleInputError("koha-remove requiere root; ejecute la tarea con become: true")
-            remove_binary = p.get("koha_remove_path") or shutil.which("koha-remove")
-            if not remove_binary:
-                raise ModuleInputError("no se encontró koha-remove; instale los paquetes Koha o defina koha_remove_path")
-            if not os.path.isdir("/etc/koha/sites/%s" % name):
-                raise ModuleInputError("koha-remove requiere /etc/koha/sites/%s; el estado parcial no contiene el directorio de sitio" % name)
-            remove_argv = [remove_binary]
-            if not p.get("remove_database"):
-                remove_argv.append("--keep-mysql")
-            if p.get("purge_data"):
-                remove_argv.append("--purge-all")
-            remove_argv.append(name)
-            rc, out, err = module.run_command(remove_argv, check_rc=False)
-            if rc:
-                raise ModuleInputError("koha-remove falló (rc=%s); stdout/stderr se omitieron por seguridad" % rc)
-            if os.path.exists(marker_path):
-                os.unlink(marker_path)
-            warnings = []
-            if not p.get("remove_database"):
-                warnings.append("La base de datos se conservó.")
-            elif p.get("database") and p["database"] != "koha_%s" % name:
-                warnings.append("koha-remove elimina su DB convencional koha_<instance>; revise manualmente la DB personalizada %s." % p["database"])
-            if not p.get("purge_data"):
-                warnings.append("/var/lib/koha y uploads se conservaron; use purge_data=true si desea borrarlos.")
-            module.exit_json(changed=True, instance=name, name=name, state="absent", actions=["koha-remove"], notices=warnings)
-        if mode == "populate":
-            if detected != "requested":
-                raise ModuleInputError("populate requiere estado requested coherente (config Koha, Apache, directorio y marcador de solicitud); estado detectado: %s" % detected)
-        elif detected == "requested":
-            raise ModuleInputError("la instancia está requested; use db_mode=populate tras preparar la base externa")
-
-        if detected == "present":
-            if p.get("repair"):
-                raise ModuleInputError("repair solo se aplica al estado partial; use reconfigure=true para cambiar configuración present")
-            try:
-                with open(marker_path, encoding="utf-8") as f:
-                    saved = json.load(f)
-            except Exception:
-                raise ModuleInputError("marcador de instancia ilegible; inspeccione manualmente, no se ejecutará koha-create")
-            changed_config = saved.get("fingerprint") != _safe_fingerprint(p)
-            if changed_config and not p.get("reconfigure"):
-                raise ModuleInputError("la instancia existe con parámetros distintos (drift); use reconfigure=true junto con las dos confirmaciones para reconstruir su configuración preservando la DB")
-            if not changed_config:
-                if p.get("timezone") and mode != "request" and not module.check_mode:
-                    if os.geteuid() != 0:
-                        raise ModuleInputError("la carga de zonas horarias MariaDB requiere root; ejecute la tarea con become: true")
-                    timezone_changed = ensure_mariadb_timezone(module, p["timezone"], p.get("dbhost"))
-                actions = ["cargar tablas de zonas horarias MariaDB"] if timezone_changed else []
-                module.exit_json(changed=timezone_changed, instance=name, name=name, state="present", db_mode=mode, config_path=config_path, apache_site_path=apache_path, actions=actions, notices=["La instancia está creada; koha-create no se ejecutó."])
-            rebuild = True
-        elif detected == "partial":
-            if not p.get("repair"):
-                raise ModuleInputError("recursos parciales o instancia no administrada detectados (%s); use repair=true y las dos confirmaciones para reconstruir la configuración preservando la DB" % ", ".join(k for k, exists in paths.items() if exists))
-            rebuild = True
-        elif p.get("repair") or p.get("reconfigure"):
-            raise ModuleInputError("repair requiere state partial y reconfigure requiere una instancia present")
-
-        # Koha applies its configured IANA timezone to each MariaDB session.
-        # Provision the server's timezone tables here so a new or rebuilt
-        # local instance can connect without a manual database step.
-        if p.get("timezone") and mode != "request" and not module.check_mode:
-            if os.geteuid() != 0:
-                raise ModuleInputError("la carga de zonas horarias MariaDB requiere root; ejecute la tarea con become: true")
-            timezone_changed = ensure_mariadb_timezone(module, p["timezone"], p.get("dbhost"))
-
-        binary = _find_binary(p.get("koha_create_path"))
-        if not binary:
-            raise ModuleInputError("no se encontró koha-create; instale los paquetes Koha o defina koha_create_path")
-        if os.geteuid() != 0:
-            raise ModuleInputError("koha-create requiere root; ejecute la tarea con become: true")
-        if p.get("configfile") and not os.path.isfile(p["configfile"]):
-            raise ModuleInputError("configfile no existe en el nodo remoto")
-        if p.get("passwdfile") and not os.path.isfile(p["passwdfile"]):
-            raise ModuleInputError("passwdfile no existe en el nodo remoto")
-        supplied_db_record = _read_passwd_record(p["passwdfile"], name) if p.get("passwdfile") else None
-        if p.get("letsencrypt") and p.get("tls_termination") == "proxy":
-            raise ModuleInputError("Let's Encrypt de koha-create configura TLS en Apache; no lo use cuando HAProxy/proxy termina TLS")
-        if module.check_mode:
-            planned = ["koha-remove --keep-mysql", "koha-create --use-db"] if rebuild else ["ejecutar koha-create en modo %s" % mode]
-            if p.get("timezone") and mode != "request":
-                planned.insert(0, "asegurar tablas de zonas horarias MariaDB si hacen falta")
-            module.exit_json(changed=True, instance=name, name=name, state="requested" if mode == "request" else "present", db_mode="use" if rebuild else mode,
-                             config_path=config_path, apache_site_path=apache_path,
-                             actions=planned, notices=["Plan previsto; no se verificó que Apache/DB permitan completar la operación."])
-        _check_apache_prerequisites(module)
-        if p.get("letsencrypt"):
-            _check_letsencrypt(module)
-
-        # Check help before writing files or invoking the mutating command. The
-        # module sends no help output to Ansible because output can vary by version.
-        help_rc, help_out, help_err = module.run_command([binary, "--help"], check_rc=False)
-        help_text = help_out + help_err
-        backend_mode = "use" if rebuild else mode
-        needed = ["--configfile", {"create": "--create-db", "request": "--request-db", "populate": "--populate-db", "use": "--use-db"}[backend_mode]]
-        option_flags = {
-            "marcflavor": "--marcflavor", "zebralang": "--zebralang", "elasticsearch_server": "--elasticsearch-server",
-            "memcached_servers": "--memcached-servers", "memcached_prefix": "--memcached-prefix", "enable_sru": "--enable-sru",
-            "sru_port": "--sru-port", "dbhost": "--dbhost", "database": "--database", "passwdfile": "--passwdfile",
-            "defaultsql": "--defaultsql", "adminuser": "--adminuser", "template_cache_dir": "--template-cache-dir",
-            "timezone": "--timezone", "upload_path": "--upload-path", "tmp_path": "--tmp-path", "keep_cookies": "--keep-cookie",
-        }
-        for key, flag in option_flags.items():
-            if p.get(key):
-                needed.append(flag)
-        if p.get("message_broker"):
-            needed.extend("--mb-%s" % key.replace("username", "user").replace("password", "pass") for key, value in p["message_broker"].items() if value is not None)
-        if p.get("letsencrypt"):
-            needed.append("--letsencrypt")
-        if rebuild:
-            needed.append("--passwdfile")
-        missing = [flag for flag in needed if flag not in help_text]
-        if missing:
-            raise ModuleInputError("koha-create instalado no anuncia opciones requeridas (%s); compatibilidad no verificada" % ", ".join(missing))
-
-        tmpdir = tempfile.mkdtemp(prefix="ansible-koha-create-")
-        os.chmod(tmpdir, 0o700)
-        try:
-            cfg = os.path.join(tmpdir, "koha-create.conf")
-            passwdfile = None
-            existing_db_record = None
-            if rebuild and os.path.isfile(config_path):
-                existing_db_record = _existing_db_credentials(config_path, name, p.get("db_credentials")).strip().split(":")
-                if p.get("database") and p["database"] != existing_db_record[3]:
-                    raise ModuleInputError("reconfigure no cambia de base de datos; database debe coincidir con la instancia actual")
-                if p.get("dbhost") and p["dbhost"] != existing_db_record[4]:
-                    raise ModuleInputError("reconfigure no migra bases de datos; dbhost debe coincidir con la instancia actual")
-            if p.get("db_credentials"):
-                passwdfile = os.path.join(tmpdir, "passwd")
-                if rebuild and not existing_db_record and not p.get("database"):
-                    raise ModuleInputError("repair sin koha-conf.xml requiere database para identificar la DB que se conservará")
-                dbname = existing_db_record[3] if existing_db_record else (p.get("database") or "koha_%s" % name)
-                dbhost = existing_db_record[4] if existing_db_record else (p.get("dbhost") or "localhost")
-                username = p["db_credentials"]["username"]
-                password = p["db_credentials"]["password"]
-                _write_private(passwdfile, "%s:%s:%s:%s:%s\n" % (name, username, password, dbname, dbhost))
-            elif rebuild and p.get("passwdfile"):
-                if existing_db_record and (supplied_db_record[3], supplied_db_record[4]) != (existing_db_record[3], existing_db_record[4]):
-                    raise ModuleInputError("passwdfile apunta a una DB/host distintos; repair/reconfigure preserva la DB actual")
-                passwdfile = p["passwdfile"]
-            elif rebuild and os.path.isfile(config_path):
-                passwdfile = os.path.join(tmpdir, "passwd")
-                _write_private(passwdfile, ":".join(existing_db_record) + "\n")
-            elif rebuild:
-                raise ModuleInputError("para reparar/reconfigurar sin koha-conf.xml debe proporcionar db_credentials o passwdfile")
-            if rebuild and not os.path.isdir("/etc/koha/sites/%s" % name):
-                raise ModuleInputError("la reconstrucción requiere el directorio /etc/koha/sites/%s; no se eliminará parcialmente el resto del sistema" % name)
-            _write_private(cfg, render_config(p, passwdfile))
-            if rebuild:
-                if p.get("defaultsql"):
-                    raise ModuleInputError("defaultsql no se aplica en repair/reconfigure porque el backend se ejecuta con --use-db")
-                if not p.get("db_credentials") and not p.get("passwdfile") and not os.path.isfile(config_path):
-                    raise ModuleInputError("repair/reconfigure sin configfile requiere credenciales DB explícitas")
-                remove_binary = p.get("koha_remove_path") or shutil.which("koha-remove")
-                if not remove_binary:
-                    raise ModuleInputError("repair/reconfigure requiere koha-remove; defina koha_remove_path si no está en PATH")
-                rc, out, err = module.run_command([remove_binary, "--keep-mysql", name], check_rc=False)
-                if rc:
-                    raise ModuleInputError("koha-remove --keep-mysql falló (rc=%s); stdout/stderr se omitieron por seguridad" % rc)
-                if os.path.exists(marker_path):
-                    os.unlink(marker_path)
-            argv = build_argv(binary, backend_mode, cfg, name)
-            if mode == "request" and not rebuild:
-                if not os.path.isdir(os.path.dirname(request_path)):
-                    raise ModuleInputError("el directorio padre de db_request_path debe existir")
-                # koha-create writes NAME-db-request.txt to cwd; private cwd
-                # prevents accidental exposure while it is being generated.
-                rc, out, err = module.run_command(argv, cwd=tmpdir, check_rc=False)
-                generated = os.path.join(tmpdir, "%s-db-request.txt" % name)
-                if rc == 0 and os.path.isfile(generated):
-                    os.replace(generated, request_path)
-                    os.chmod(request_path, 0o600)
+        detected, found, marker = inspect_state(name, ctx.marker_path, ctx.request_path)
+        if p["db_mode"] == "populate" and not p.get("db_request_path") and marker.get("request_file"):
+            ctx.request_path = marker["request_file"]
+            detected, found, marker = inspect_state(name, ctx.marker_path, ctx.request_path)
+        action = plan_action(p, detected, marker)
+        if module.check_mode or action == "noop":
+            module.exit_json(**_plan_result(ctx, p, action, detected))
+        _require_root("koha-create/koha-remove")
+        with instance_lock(name):
+            if action == "remove":
+                result = _apply_remove(module, p, ctx, actions)
+            elif action == "adopt":
+                result = _apply_adopt(p, ctx, actions)
             else:
-                rc, out, err = module.run_command(argv, cwd=tmpdir, check_rc=False)
-            if rc != 0:
-                hint = _safe_backend_failure_hint(out + "\n" + err)
-                raise ModuleInputError("koha-create falló (rc=%s). %s" % (rc, hint))
-            final_state = "requested" if mode == "request" and not rebuild else "present"
-            # Only mark success if the expected resource set really appeared.
-            after, after_paths, _ = inspect_state(name, marker_path, request_path)
-            required_resources = ("config", "apache", "site_dir", "user", "group")
-            if not all(after_paths.get(key, False) for key in required_resources):
-                raise ModuleInputError("koha-create terminó sin error pero faltan recursos esperados (%s); estado parcial, no se reintentará automáticamente" % ", ".join(k for k in required_resources if not after_paths.get(k, False)))
-            _write_private(marker_path, json.dumps({"state": final_state, "fingerprint": _safe_fingerprint(p), "request_file": request_path if mode == "request" else None}, sort_keys=True) + "\n")
-            # Marker is stored in a Koha-owned directory, private to root.
-            os.chmod(marker_path, 0o600)
-            result = {"changed": True, "instance": name, "name": name, "state": final_state, "db_mode": mode, "config_path": config_path, "apache_site_path": apache_path,
-                      "actions": ["koha-create --%s" % mode], "notices": []}
-            if timezone_changed:
-                result["actions"].insert(0, "cargar tablas de zonas horarias MariaDB")
-            if mode == "request" and not rebuild:
-                result["request_file"] = request_path
-            if p.get("vhosts"):
-                result["opac_hostname"], result["staff_hostname"] = _vhost_hostnames(name, p["vhosts"])
-            if rebuild:
-                result["db_mode"] = "use"
-                result["actions"] = ["koha-remove --keep-mysql", "koha-create --use-db"]
-                result["notices"] = ["Se reconstruyeron configuración y servicios; DB y /var/lib/koha se conservaron."]
-            if p.get("letsencrypt"):
-                result["notices"].append("Let's Encrypt local modifica Apache y solicita certificados; los DNS deben resolver públicamente y el puerto 80 debe llegar a este host.")
-            module.exit_json(**result)
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-    except ModuleInputError as exc:
-        module.fail_json(msg=str(exc), instance=name, name=name, state="unknown", db_mode=mode,
-                         changed=timezone_changed, partial=timezone_changed,
-                         actions=["cargar tablas de zonas horarias MariaDB"] if timezone_changed else [])
-    except OSError as exc:
-        module.fail_json(msg="error de filesystem ejecutando la operación Koha (%s); se omitieron datos sensibles" % exc.__class__.__name__, instance=name, name=name, state="unknown", db_mode=mode,
-                         changed=timezone_changed, partial=timezone_changed,
-                         actions=["cargar tablas de zonas horarias MariaDB"] if timezone_changed else [])
+                result = _apply_build(module, p, ctx, action, actions)
+        module.exit_json(**result)
+    except (ModuleInputError, OSError) as exc:
+        message = str(exc) if isinstance(exc, ModuleInputError) else (
+            "error de filesystem ejecutando la operación Koha (%s); se omitieron datos sensibles" % exc.__class__.__name__)
+        module.fail_json(msg=message, instance=name, state="unknown", db_mode=p["db_mode"],
+                         changed=bool(actions), partial=bool(actions), actions=actions)
 
 
 if __name__ == "__main__":

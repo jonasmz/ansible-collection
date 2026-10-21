@@ -6,6 +6,7 @@ use warnings;
 use JSON::PP qw(decode_json encode_json);
 
 my $PROTOCOL = 1;
+my %SELECTOR_MODES = map { $_ => 1 } qw(top footer both);
 my @UPDATED_PREFERENCES;
 
 sub emit {
@@ -110,12 +111,10 @@ sub run {
         die "C4::Context could not read system preference $name consistently"
             unless defined $schema_value && "$raw" eq "$schema_value";
         if ($name eq 'OpacLangSelectorMode' || $name eq 'StaffLangSelectorMode') {
-            my $options = $row->options;
-            die "System preference $name has no selectable values in the installed schema"
-                unless defined $options && length $options;
-            my %allowed = map { $_ => 1 } split /\|/, $options;
-            die "Installed schema for $name does not accept the requested value '$values->{$name}'"
-                unless $allowed{$values->{$name}};
+            # Koha keeps these choices in its preference (.pref) files and leaves
+            # systempreferences.options empty, so they cannot be read from the database.
+            die "System preference $name does not accept the requested value '$values->{$name}'"
+                unless $SELECTOR_MODES{$values->{$name}};
         }
         $current_raw{$name} = $raw;
         if ($name eq $staff_pref || $name eq 'OPACLanguages') {
@@ -173,31 +172,40 @@ sub run {
 
     @UPDATED_PREFERENCES = ();
     if ($request->{apply}) {
-        for my $name (@updates) {
-            my $ok = eval { C4::Context->set_preference($name, $values->{$name}); 1 };
-            if (!$ok) {
-                my $error = $@ || 'unknown Koha preference update error';
-                die "Failed updating $name after updating [" . join(', ', @UPDATED_PREFERENCES) . "]: $error";
+        # All-or-nothing: preferences are written and read back inside one transaction, so a
+        # failure never leaves some of them changed and others not.
+        $schema->txn_begin;
+        my $ok = eval {
+            for my $name (@updates) {
+                C4::Context->set_preference($name, $values->{$name});
             }
-            push @UPDATED_PREFERENCES, $name;
-        }
-        # Read back every managed value through Koha's API; report observed state, not the plan.
-        for my $name (@pref_order) {
-            next unless exists $values->{$name};
-            my $actual = C4::Context->preference($name);
-            die "Koha did not retain the requested value for $name" unless defined $actual && $actual eq $values->{$name};
-            if ($name eq $staff_pref || $name eq 'OPACLanguages') {
-                my @languages = grep { length } map { s/^\s+|\s+$//gr } split /,/, $actual, -1;
-                $after{$name eq $staff_pref ? 'staff_languages' : 'opac_languages'} = \@languages;
-            } elsif ($name eq 'opaclanguagesdisplay') {
-                die "Koha returned an invalid selector value for opaclanguagesdisplay" unless $actual eq '0' || $actual eq '1';
-                $after{opac_language_selector} = $actual eq '1' ? JSON::PP::true : JSON::PP::false;
-            } elsif ($name eq 'OpacLangSelectorMode') {
-                $after{opac_selector_position} = $actual;
-            } else {
-                $after{staff_selector_position} = $actual;
+            # Read back every managed value through Koha's API; report observed state, not the plan.
+            for my $name (@pref_order) {
+                next unless exists $values->{$name};
+                my $actual = C4::Context->preference($name);
+                die "Koha did not retain the requested value for $name" unless defined $actual && $actual eq $values->{$name};
+                if ($name eq $staff_pref || $name eq 'OPACLanguages') {
+                    my @languages = grep { length } map { s/^\s+|\s+$//gr } split /,/, $actual, -1;
+                    $after{$name eq $staff_pref ? 'staff_languages' : 'opac_languages'} = \@languages;
+                } elsif ($name eq 'opaclanguagesdisplay') {
+                    die "Koha returned an invalid selector value for opaclanguagesdisplay" unless $actual eq '0' || $actual eq '1';
+                    $after{opac_language_selector} = $actual eq '1' ? JSON::PP::true : JSON::PP::false;
+                } elsif ($name eq 'OpacLangSelectorMode') {
+                    $after{opac_selector_position} = $actual;
+                } else {
+                    $after{staff_selector_position} = $actual;
+                }
             }
-        }
+            $schema->txn_commit;
+            1;
+        };
+        my $error = $@;
+        $schema->txn_rollback unless $ok;
+        # Values cached while the transaction was open may be stale either way.
+        C4::Context->clear_syspref_cache;
+        die "Preference update failed and was rolled back; no preference was changed: " . ($error || 'unknown Koha preference update error')
+            unless $ok;
+        @UPDATED_PREFERENCES = @updates;
     }
 
     return {

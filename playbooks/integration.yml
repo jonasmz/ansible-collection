@@ -54,7 +54,7 @@
         instance: "{{ koha_instance }}"
         state: present
         language: en
-        marcflavor: MARC21
+        marcflavor: marc21
         library:
           code: "{{ koha_library_code }}"
           name: Biblioteca de integración
@@ -96,7 +96,7 @@
         instance: "{{ koha_instance }}"
         state: present
         language: en
-        marcflavor: MARC21
+        marcflavor: marc21
         library:
           code: "{{ koha_library_code }}"
           name: Biblioteca de integración
@@ -134,50 +134,33 @@
       register: initialize_rechecked
       no_log: true
 
-    - name: Configure SMTP without contacting an external provider
+    - name: Add a default SMTP server without contacting an external provider
       jmz.koha.smtp:
         instance: "{{ koha_instance }}"
         server:
+          name: koha-qa
           host: localhost
           port: 25
-          timeout: 120
-          ssl_mode: disabled
-          user_name: ""
-          password: ""
-          debug: false
-        admin_email_address: koha-qa@example.invalid
-        enabled: true
       register: smtp_configured
 
     - name: Recheck SMTP idempotency
       jmz.koha.smtp:
         instance: "{{ koha_instance }}"
         server:
+          name: koha-qa
           host: localhost
           port: 25
-          timeout: 120
-          ssl_mode: disabled
-          user_name: ""
-          password: ""
-          debug: false
-        admin_email_address: koha-qa@example.invalid
-        enabled: true
       register: smtp_rechecked
-
-    - name: Leave outbound email disabled after the integration check
-      jmz.koha.smtp:
-        instance: "{{ koha_instance }}"
-        enabled: false
-      register: smtp_disabled
 
     - name: Enable and start Apache Plack
       jmz.koha.plack:
         instance: "{{ koha_instance }}"
         enabled: true
         state: started
+        reload_apache: true
       register: plack_started
 
-    - name: Enable and start Zebra
+    - name: Start Zebra
       jmz.koha.zebra:
         instance: "{{ koha_instance }}"
         state: started
@@ -194,14 +177,14 @@
       poll: 30
       when: koha_run_initial_rebuild | bool
 
-    - name: Enable and start both background worker queues
+    - name: Start both background worker queues
       jmz.koha.worker:
         instance: "{{ koha_instance }}"
         state: started
         queue: all
       register: workers_started
 
-    - name: Enable and start the incremental Zebra indexer
+    - name: Start the incremental Zebra indexer
       jmz.koha.zebra_indexer:
         instance: "{{ koha_instance }}"
         state: started
@@ -266,12 +249,10 @@
           - zebra_rechecked.state == 'started'
           - indexer_rechecked.state == 'started'
           - workers_rechecked.workers | length > 0
-          - workers_rechecked.workers.values() | selectattr('running', 'equalto', true) | list | length == workers_rechecked.workers | length
+          - workers_rechecked.workers.values() | selectattr('state', 'equalto', 'started') | list | length == workers_rechecked.workers | length
           - not instance_rechecked.changed
           - not initialize_rechecked.changed
           - not smtp_rechecked.changed
-          - smtp_rechecked.smtp_effective_source == 'xml'
-          - smtp_disabled.email_enabled == false
           - not plack_rechecked.changed
           - not zebra_rechecked.changed
           - not workers_rechecked.changed

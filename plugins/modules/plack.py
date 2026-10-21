@@ -1,129 +1,102 @@
-# SPDX-License-Identifier: MIT-0
 #!/usr/bin/python
-"""Manage the Plack daemon for one Koha instance."""
+# SPDX-License-Identifier: MIT-0
+"""Manage the Plack daemon of one Koha instance."""
 
 DOCUMENTATION = r'''
 ---
 module: plack
-short_description: Manage a Koha instance's Plack daemon and configuration
+short_description: Administra el demonio Plack de una instancia Koha y su configuración de Apache
 description:
-  - Uses the packaged C(koha-plack) utility for lifecycle and enablement operations.
-  - C(enabled) controls Koha's Apache Plack configuration and systemd boot enablement; it does not start or stop the daemon.
-  - C(state) controls the running daemon independently.
+  - Usa el comando empaquetado C(koha-plack) para activar o desactivar Plack y para arrancar, detener, reiniciar o recargar el demonio.
+  - C(enabled) solo descomenta o comenta los C(Include) de Plack en el sitio de Apache de la instancia; no arranca ni detiene el demonio y no recarga Apache.
+  - C(state) controla el demonio de forma independiente. Mientras Plack no esté activado, la instancia sigue sirviéndose por CGI.
 version_added: "1.1.0"
 author: Jonas MZ
 requirements:
-  - koha-plack installed on the managed host
+  - Koha empaquetado para Debian/Ubuntu (C(koha-plack), C(koha-list)).
+  - Módulos de Apache C(headers) y C(proxy_http) habilitados; sin ellos Apache no puede servir la instancia por Plack.
 options:
   instance:
-    description: Koha instance identifier.
+    description: Instancia Koha existente.
     type: str
     required: true
   state:
-    description: Desired daemon state. Omitted means observe only.
+    description: Estado deseado del demonio. Si se omite o es C(status), no se toca el demonio.
     type: str
     choices: [started, stopped, restarted, reloaded, status]
   enabled:
-    description: Whether Plack should be enabled in Koha's instance Apache configuration.
+    description: Si Plack debe estar activado en la configuración de Apache de la instancia. No puede combinarse con C(state=status).
     type: bool
+  reload_apache:
+    description:
+      - Recarga Apache (C(graceful)) cuando esta ejecución cambió C(enabled), porque Apache solo lee los C(Include) al recargar.
+      - Con C(false) el módulo devuelve C(apache_reload_required=true) y la recarga queda a cargo del playbook.
+    type: bool
+    default: false
+  timeout:
+    description: Segundos máximos de cada llamada a un comando de Koha.
+    type: int
+    default: 60
+notes:
+  - Las operaciones de cambio requieren root; use C(become=true).
 '''
 
 EXAMPLES = r'''
-- name: Start Plack
-  jmz.koha.plack:
-    instance: biblioteca
-    state: started
-  become: true
-
-- name: Enable Plack without starting it
+- name: Activar Plack, arrancarlo y recargar Apache
   jmz.koha.plack:
     instance: biblioteca
     enabled: true
+    state: started
+    reload_apache: true
   become: true
 
-- name: Enable and start Plack
+- name: Activar Plack y recargar Apache con un handler
   jmz.koha.plack:
     instance: biblioteca
     enabled: true
     state: started
   become: true
+  notify: Reload Apache
+  register: plack
 
-- name: Gracefully reload Plack
+- name: Recargar el demonio de forma elegante
   jmz.koha.plack:
     instance: biblioteca
     state: reloaded
   become: true
 
-- name: Observe Plack state
+- name: Consultar sin cambiar nada
   jmz.koha.plack:
     instance: biblioteca
-    state: status
-
-- name: Manage several instances
-  jmz.koha.plack:
-    instance: "{{ item }}"
-    state: started
-    enabled: true
-  loop:
-    - biblioteca
-    - archivo
-  become: true
+  register: plack_status
 '''
 
 RETURN = r'''
-instance:
-  description: Koha instance identifier.
-  returned: always
-  type: str
-running:
-  description: Whether the Plack daemon is running.
-  returned: always
-  type: bool
-enabled:
-  description: Whether Plack is enabled in the Koha instance configuration.
-  returned: always
-  type: bool
-state:
-  description: Observed daemon state.
-  returned: always
-  type: str
-  sample: running
-actions:
-  description: Lifecycle or configuration operations executed by this invocation.
-  returned: always
-  type: list
-stdout:
-  description: Relevant command output.
-  returned: when a command was executed
-  type: str
-stderr:
-  description: Relevant command diagnostics.
-  returned: when a command was executed
-  type: str
-rc:
-  description: Last command return code.
-  returned: when a command was executed
-  type: int
+instance: {description: Instancia Koha., returned: always, type: str}
+running: {description: "Si el demonio está activo tras la ejecución; en check mode, el proyectado.", returned: when known, type: bool}
+enabled: {description: "Si Plack está activado en Apache tras la ejecución; en check mode, el proyectado.", returned: when known, type: bool}
+previous_state: {description: "Estado del demonio antes de operar, C(started) o C(stopped).", returned: when known, type: str}
+state: {description: "Estado del demonio resultante, C(started) o C(stopped).", returned: when known, type: str}
+actions: {description: "Operaciones ejecutadas (o que se ejecutarían en check mode), en orden.", returned: always, type: list, elements: str}
+apache_reload_required: {description: Verdadero si cambió C(enabled) y Apache aún no se recargó., returned: always, type: bool}
+planned: {description: Verdadero en check mode., returned: always, type: bool}
+diagnostics: {description: Llamadas realizadas a comandos de Koha, con salida acotada., returned: always, type: list, elements: dict}
+msg: {description: Resumen del resultado., returned: always, type: str}
 '''
 
+import contextlib
 import os
 import re
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.jmz.koha.plugins.module_utils.koha_instance import choice_normalizer
+from ansible_collections.jmz.koha.plugins.module_utils import koha_service as svc
 
 
-NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,10}$")
+STATES = ["started", "stopped", "restarted", "reloaded", "status"]
 OPAC_INCLUDE = re.compile(r"^\s*Include /etc/koha/apache-shared-opac-plack\.conf\s*$")
 INTRA_INCLUDE = re.compile(r"^\s*Include /etc/koha/apache-shared-intranet-plack\.conf\s*$")
-
-
-class PlackError(Exception):
-    """An invalid or uninterpretable Koha Plack state."""
-
-
-def _active_include(lines, pattern):
-    return any(pattern.match(line) for line in lines)
+APACHE_MODULES = (("headers_module", "headers"), ("proxy_http_module", "proxy_http"))
 
 
 def inspect_enabled(instance):
@@ -133,110 +106,112 @@ def inspect_enabled(instance):
         # Koha supports the extensionless site file as a legacy alternative.
         config = "/etc/apache2/sites-available/%s" % instance
     if not os.path.isfile(config):
-        raise PlackError("Koha Apache configuration for instance %s was not found" % instance)
+        raise svc.ServiceError("no se encontró la configuración de Apache de la instancia %s" % instance)
     try:
         with open(config, "r", encoding="utf-8") as stream:
             lines = stream.readlines()
     except OSError as exc:
-        raise PlackError("Unable to read Koha Apache configuration %s: %s" % (config, exc))
-    opac = _active_include(lines, OPAC_INCLUDE)
-    intranet = _active_include(lines, INTRA_INCLUDE)
+        raise svc.ServiceError("no se pudo leer %s: %s" % (config, exc))
+    opac = any(OPAC_INCLUDE.match(line) for line in lines)
+    intranet = any(INTRA_INCLUDE.match(line) for line in lines)
     if opac != intranet:
-        raise PlackError("Plack configuration for %s is inconsistent between OPAC and intranet" % instance)
+        raise svc.ServiceError("la configuración de Plack de %s es inconsistente entre OPAC e intranet" % instance)
     return opac
 
 
-def inspect_running(module, binary, instance):
-    """Use koha-plack's status action and accept only source-backed status results."""
-    rc, stdout, stderr = module.run_command([binary, "--status", instance])
-    output = "%s\n%s" % (stdout, stderr)
-    normalized = output.lower()
-    if rc == 0:
-        if "plack running for" in normalized or re.search(r"active:\s+active \(running\)", normalized):
-            return True, rc, stdout, stderr
-        raise PlackError("koha-plack --status returned success but its output did not identify a running daemon")
-    if rc == 3 and ("plack not running for" in normalized or "active: inactive (dead)" in normalized):
-        return False, rc, stdout, stderr
-    if "does not exist" in normalized or "not a koha instance" in normalized or "no such instance" in normalized:
-        raise PlackError("Koha instance %s does not exist" % instance)
-    raise PlackError("Unable to determine Plack status (rc=%s): %s" % (rc, output.strip()))
+def apache_control(module):
+    return (module.get_bin_path("apache2ctl", required=False, opt_dirs=["/usr/sbin"])
+            or module.get_bin_path("apachectl", required=False, opt_dirs=["/usr/sbin"]))
 
 
-def _run(module, binary, operation, instance):
-    rc, stdout, stderr = module.run_command([binary, "--%s" % operation, instance])
+def require_apache_modules(module, diagnostics, timeout):
+    control = apache_control(module)
+    if not control:
+        raise svc.ServiceError("no se encontró apache2ctl para comprobar los módulos de Apache")
+    rc, stdout, stderr = svc.run(module, [control, "-M"], diagnostics, "apache_modules", timeout)
     if rc != 0:
-        raise PlackError("koha-plack --%s failed for %s (rc=%s): %s" %
-                         (operation, instance, rc, (stderr or stdout).strip()))
-    return rc, stdout, stderr
+        raise svc.ServiceError("no se pudieron listar los módulos de Apache: %s" % svc.bounded(stderr or stdout).strip())
+    missing = [name for module_name, name in APACHE_MODULES if module_name not in stdout + stderr]
+    if missing:
+        raise svc.ServiceError("Plack requiere los módulos de Apache %s; ejecute a2enmod %s y recargue Apache"
+                               % (", ".join(missing), " ".join(missing)))
 
 
 def main():
     module = AnsibleModule(
         argument_spec=dict(
             instance=dict(type="str", required=True),
-            state=dict(type=choice_normalizer(["started", "stopped", "restarted", "reloaded", "status"]), choices=["started", "stopped", "restarted", "reloaded", "status"]),
+            state=dict(type=choice_normalizer(STATES), choices=STATES),
             enabled=dict(type="bool"),
+            reload_apache=dict(type="bool", default=False),
+            timeout=dict(type="int", default=60),
         ),
         supports_check_mode=True,
     )
-    instance = module.params["instance"]
-    desired_state = module.params.get("state")
-    desired_enabled = module.params.get("enabled")
-    if not NAME_RE.fullmatch(instance):
-        module.fail_json(msg="instance must be a valid Koha instance identifier (1-11 lowercase letters, digits, or hyphens; starting with a letter)", instance=instance)
-    if desired_state == "status" and desired_enabled is not None:
-        module.fail_json(msg="state=status is read-only and cannot be combined with enabled", instance=instance)
-    binary = module.get_bin_path("koha-plack", required=False)
-    if not binary:
-        module.fail_json(msg="koha-plack was not found on the managed host; install the Koha package providing it", instance=instance)
-    if not os.path.isfile("/etc/koha/sites/%s/koha-conf.xml" % instance):
-        module.fail_json(msg="Koha instance %s does not exist (koha-conf.xml not found)" % instance, instance=instance)
-
+    p = module.params
+    instance, desired_state, desired_enabled = p["instance"], p.get("state") or "status", p.get("enabled")
+    diagnostics, actions = [], []
+    progress = {"actions": actions, "changed": False}
+    reloaded = config_changed = False
+    previous = final = enabled = None
     try:
-        running, rc, stdout, stderr = inspect_running(module, binary, instance)
+        if p["timeout"] <= 0:
+            raise svc.ServiceError("timeout debe ser positivo")
+        if p.get("state") == "status" and desired_enabled is not None:
+            raise svc.ServiceError("state=status es de solo lectura y no puede combinarse con enabled")
+        timeout = p["timeout"]
+        svc.check_instance(module, instance, diagnostics, timeout)
+        daemon = svc.Daemon(module, "plack", svc.find_command(module, "koha-plack"), instance, diagnostics, timeout)
         enabled = inspect_enabled(instance)
-        action_state = {
-            "started": "start" if not running else None,
-            "stopped": "stop" if running else None,
-            "restarted": "restart",
-            "reloaded": "reload",
-        }.get(desired_state)
         action_enabled = None
         if desired_enabled is not None and desired_enabled != enabled:
             action_enabled = "enable" if desired_enabled else "disable"
-        actions = []
-        changed = False
-        if action_enabled:
-            if not module.check_mode:
-                rc, out, err = _run(module, binary, action_enabled, instance)
-                stdout += out
-                stderr += err
-                enabled = inspect_enabled(instance)
-                if enabled != desired_enabled:
-                    raise PlackError("koha-plack --%s did not produce the requested Plack configuration" % action_enabled)
-            actions.append(action_enabled)
-            enabled = desired_enabled
-            changed = True
-        if action_state:
-            if not module.check_mode:
-                rc, out, err = _run(module, binary, action_state, instance)
-                stdout += out
-                stderr += err
-                running, rc, out, err = inspect_running(module, binary, instance)
-                stdout += out
-                stderr += err
-                if action_state in ("start", "restart") and not running:
-                    raise PlackError("Plack remained stopped after koha-plack --%s" % action_state)
-                if action_state == "stop" and running:
-                    raise PlackError("Plack remained running after koha-plack --stop")
-            actions.append(action_state)
-            changed = True
-        module.exit_json(changed=changed, instance=instance, running=running, enabled=enabled,
-                         state="running" if running else "stopped", actions=actions,
-                         stdout=stdout, stderr=stderr, rc=rc)
-    except PlackError as exc:
-        module.fail_json(msg=str(exc), instance=instance, rc=locals().get("rc"),
-                         stdout=locals().get("stdout", ""), stderr=locals().get("stderr", ""))
+        mutating = (desired_state != "status" or action_enabled) and not module.check_mode
+        if mutating:
+            svc.require_root(module)
+        with svc.service_lock(instance) if mutating else contextlib.nullcontext():
+            if action_enabled == "enable" or desired_state in ("started", "restarted", "reloaded"):
+                require_apache_modules(module, diagnostics, timeout)
+            if action_enabled:
+                actions.append(action_enabled)
+                progress["changed"] = config_changed = True
+                if not module.check_mode:
+                    rc, out, err = svc.run(module, [daemon.command, "--" + action_enabled, instance],
+                                           diagnostics, action_enabled, timeout)
+                    if rc != 0:
+                        raise svc.ServiceError("koha-plack --%s falló para %s (rc=%s): %s"
+                                               % (action_enabled, instance, rc, svc.bounded(err or out).strip()))
+                    if inspect_enabled(instance) != desired_enabled:
+                        raise svc.ServiceError("koha-plack --%s no dejó la configuración de Plack solicitada" % action_enabled)
+                enabled = desired_enabled
+            # reloaded only needs the current state; the reload itself follows.
+            previous, final = svc.reconcile(daemon, "status" if desired_state == "reloaded" else desired_state,
+                                            module.check_mode, progress)
+            if desired_state == "reloaded":
+                actions.append("reload")
+                progress["changed"] = True
+                if not module.check_mode:
+                    daemon.operate("reload")
+            if p["reload_apache"] and config_changed:
+                actions.append("reload_apache")
+                if not module.check_mode:
+                    control = apache_control(module)
+                    if not control:
+                        raise svc.ServiceError("no se encontró apache2ctl para recargar Apache")
+                    rc, out, err = svc.run(module, [control, "graceful"], diagnostics, "reload_apache", timeout)
+                    if rc != 0:
+                        raise svc.ServiceError("no se pudo recargar Apache: %s" % svc.bounded(err or out).strip())
+                reloaded = True
+    except svc.ServiceError as exc:
+        module.fail_json(msg=str(exc), instance=instance, changed=progress["changed"], actions=actions,
+                         planned=module.check_mode, diagnostics=diagnostics)
+    changed = progress["changed"]
+    module.exit_json(
+        changed=changed, instance=instance, running=final == "started", enabled=enabled, previous_state=previous,
+        state=final, actions=actions, apache_reload_required=config_changed and not reloaded,
+        planned=module.check_mode, diagnostics=diagnostics,
+        msg=("Plack ya está en el estado solicitado." if not changed else
+             "Cambios de Plack proyectados." if module.check_mode else "Plack actualizado."))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,39 @@
+---
+# Instance lifecycle against a real Koha package inside a systemd container.
+# Run from the collection root: molecule test -s instance_lifecycle
+dependency:
+  name: galaxy
+driver:
+  name: podman
+platforms:
+  - name: koha-instance
+    # Built once by extensions/molecule/image/build.sh (Koha, MariaDB, Apache preinstalled).
+    image: localhost/koha-molecule:26.05
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    systemd: always
+    privileged: true
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      callbacks_enabled: ansible.posix.profile_tasks
+  inventory:
+    group_vars:
+      all:
+        koha_release: "26.05"
+        koha_instance: molecule
+        koha_domain: example.test
+scenario:
+  test_sequence:
+    - dependency
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy
+verifier:
+  name: ansible

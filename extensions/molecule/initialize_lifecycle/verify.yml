@@ -1,0 +1,400 @@
+---
+# Characterizes the current behavior of jmz.koha.initialize against real Koha.
+# Only administrator.password is no_log, so identifiers such as CENTRAL stay readable in results.
+# Check mode (phase 2) runs the real onboarding inside a transaction that is rolled back.
+- name: Verify initialize
+  hosts: all
+  become: true
+  vars:
+    spec: "{{ {'instance': koha_instance} | combine(koha_init) }}"
+    password: "{{ koha_init.administrator.password }}"
+  tasks:
+    - name: Remember the administrator's password hash
+      ansible.builtin.command: >-
+        mysql --protocol=socket --batch --skip-column-names koha_{{ koha_instance }}
+        --execute "SELECT password FROM borrowers WHERE userid = 'admin'"
+      register: hash_before
+      changed_when: false
+
+    - name: Inspect an initialized instance
+      jmz.koha.initialize:
+        instance: "{{ koha_instance }}"
+        state: inspect
+      register: inspected
+    - ansible.builtin.assert:
+        that:
+          - not inspected.changed
+          - inspected.current_state == 'initialized'
+          - inspected.state_info.libraries == 1
+          - inspected.state_info.superlibrarians == 1
+          - inspected.state_info.item_types >= 1
+          - inspected.state_info.circulation_rules >= 1
+          - inspected.koha_version is string
+
+    - name: Running again changes nothing
+      jmz.koha.initialize:
+      args: "{{ spec }}"
+      register: rerun
+    - ansible.builtin.assert:
+        that:
+          - not rerun.changed
+          - rerun.previous_state == 'initialized'
+          - rerun.current_state == 'initialized'
+          - rerun.actions == []
+
+    # --- conflicts with existing entities fail without changing anything
+    - name: Conflicting declarations are refused
+      jmz.koha.initialize:
+      args: "{{ spec | combine(item.override) }}"
+      loop:
+        - {name: library name, pattern: different name, override: {library: {code: CENTRAL, name: Otro nombre}}}
+        - {name: category description, pattern: different declared attributes,
+           override: {patron_categories: [{code: STAFF, description: Cambiada, type: S, enrolment_period: 1, default_privacy: default},
+                                          {code: ADULT, description: Adultos, type: A, enrolment_period: 1, default_privacy: default}]}}
+        - {name: item type description, pattern: different description, override: {item_types: [{code: BOOK, description: Cambiado}]}}
+        - {name: exact circulation rule, pattern: already differs,
+           override: {circulation_rules: [{library: CENTRAL, category: ADULT, item_type: BOOK, rules: {issuelength: 21}}]}}
+        - {name: administrator identity, pattern: identity conflicts,
+           override: {administrator: "{{ koha_init.administrator | combine({'cardnumber': 'OTHER99'}) }}"}}
+        - {name: marc flavour, pattern: conflicts with requested flavour, override: {marcflavor: UNIMARC}}
+        - {name: unknown rule name, pattern: Unknown circulation rule,
+           override: {circulation_rules: [{library: CENTRAL, category: ADULT, item_type: BOOK, rules: {nonexistentrule: 1}}]}}
+      loop_control:
+        label: "{{ item.name }}"
+      register: conflicts
+      ignore_errors: true
+    - ansible.builtin.assert:
+        that:
+          - item is failed
+          - item.item.pattern in item.msg
+          - not item.changed
+          - item.current_state == 'initialized'
+          - password not in (item | dict2items | rejectattr('key', 'equalto', 'item') | list | to_json)
+        quiet: true
+      loop: "{{ conflicts.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # --- additive onboarding on an already initialized instance
+    - name: A new item type and rule are added
+      jmz.koha.initialize:
+      args: >-
+          {{ spec | combine({'item_types': koha_init.item_types + [{'code': 'DVD', 'description': 'Videos'}],
+                             'circulation_rules': koha_init.circulation_rules +
+                               [{'library': 'CENTRAL', 'category': 'ADULT', 'item_type': 'DVD', 'rules': {'issuelength': 7}}]}) }}
+      register: additive
+    - ansible.builtin.assert:
+        that:
+          - additive.changed
+          - "'item_type_created:DVD' in additive.actions"
+          - "'circulation_rules_set:CENTRAL:ADULT:DVD' in additive.actions"
+          - additive.current_state == 'initialized'
+
+    - name: The existing administrator keeps the original password
+      ansible.builtin.command: >-
+        mysql --protocol=socket --batch --skip-column-names koha_{{ koha_instance }}
+        --execute "SELECT password FROM borrowers WHERE userid = 'admin'"
+      register: hash_after
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - hash_before.stdout | length > 20
+          - hash_after.stdout == hash_before.stdout
+
+    # --- check mode tells the truth and leaves the database alone
+    - name: Count item types before the check
+      ansible.builtin.command: >-
+        mysql --protocol=socket --batch --skip-column-names koha_{{ koha_instance }}
+        --execute "SELECT COUNT(*) FROM itemtypes"
+      register: itemtypes_before
+      changed_when: false
+    - name: Check mode inspect works
+      jmz.koha.initialize:
+        instance: "{{ koha_instance }}"
+        state: inspect
+      check_mode: true
+      register: check_inspect
+    - name: Check mode reports what an additive run would create
+      jmz.koha.initialize:
+      args: >-
+        {{ spec | combine({'item_types': koha_init.item_types + [{'code': 'CD', 'description': 'Discos'}],
+                           'circulation_rules': koha_init.circulation_rules +
+                             [{'library': 'CENTRAL', 'category': 'ADULT', 'item_type': 'CD', 'rules': {'issuelength': 3}}]}) }}
+      check_mode: true
+      register: check_additive
+    - name: Check mode with nothing to do
+      jmz.koha.initialize:
+      args: "{{ spec }}"
+      check_mode: true
+      register: check_noop
+    - name: Check mode refuses the same conflicts as a real run
+      jmz.koha.initialize:
+      args: "{{ spec | combine({'library': {'code': 'CENTRAL', 'name': 'Otro nombre'}}) }}"
+      check_mode: true
+      register: check_conflict
+      ignore_errors: true
+    - name: Count item types after the checks
+      ansible.builtin.command: >-
+        mysql --protocol=socket --batch --skip-column-names koha_{{ koha_instance }}
+        --execute "SELECT COUNT(*) FROM itemtypes"
+      register: itemtypes_after
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - not check_inspect.changed
+          - check_inspect.current_state == 'initialized'
+          - check_additive.changed
+          - check_additive.planned
+          - not check_additive.partial
+          - "'item_type_created:CD' in check_additive.actions"
+          - "'circulation_rules_set:CENTRAL:ADULT:CD' in check_additive.actions"
+          - not check_noop.changed
+          - check_noop.actions == []
+          - check_conflict is failed
+          - "'different name' in check_conflict.msg"
+          - itemtypes_after.stdout == itemtypes_before.stdout
+    - name: The planned item type is really created by a real run
+      jmz.koha.initialize:
+      args: >-
+        {{ spec | combine({'item_types': koha_init.item_types + [{'code': 'CD', 'description': 'Discos'}],
+                           'circulation_rules': koha_init.circulation_rules +
+                             [{'library': 'CENTRAL', 'category': 'ADULT', 'item_type': 'CD', 'rules': {'issuelength': 3}}]}) }}
+      register: real_additive
+    - ansible.builtin.assert:
+        that: "'item_type_created:CD' in real_additive.actions"
+
+    - name: Other Koha modules stage their helper in check mode too
+      jmz.koha.smtp:
+        instance: "{{ koha_instance }}"
+        server: {name: Check, host: smtp.example.test}
+      check_mode: true
+      register: smtp_check
+    - name: No SMTP server was created by the check
+      ansible.builtin.command: >-
+        mysql --protocol=socket --batch --skip-column-names koha_{{ koha_instance }}
+        --execute "SELECT COUNT(*) FROM smtp_servers"
+      register: smtp_rows
+      changed_when: false
+    - name: Localization in check mode
+      jmz.koha.localization:
+        instance: "{{ koha_instance }}"
+        staff_languages: [en]
+      check_mode: true
+      register: localization_check
+    - ansible.builtin.assert:
+        that:
+          - smtp_check.changed
+          - smtp_check.created
+          - smtp_rows.stdout == '0'
+          - localization_check is not failed
+          - localization_check.planned
+
+    # --- a failed onboarding leaves the installer data and can be resumed
+    - name: Create a second, uninitialized instance
+      jmz.koha.instance:
+        instance: "{{ koha_second_instance }}"
+        db_mode: create
+        marcflavor: marc21
+        zebralang: en
+    - name: A fresh database is reported as uninitialized
+      jmz.koha.initialize:
+        instance: "{{ koha_second_instance }}"
+        state: inspect
+      register: fresh
+    - ansible.builtin.assert:
+        that:
+          - fresh.current_state == 'uninitialized'
+          - fresh.state_info.tables == 0
+
+    - name: Initialize with a password Koha rejects
+      jmz.koha.initialize:
+      args: "{{ spec | combine({'instance': koha_second_instance,
+                                  'administrator': koha_init.administrator | combine({'password': 'x'})}) }}"
+      register: rejected
+      ignore_errors: true
+    - name: The installer data survives the failed onboarding
+      jmz.koha.initialize:
+        instance: "{{ koha_second_instance }}"
+        state: inspect
+      register: after_failure
+    - ansible.builtin.assert:
+        that:
+          - rejected is failed
+          - "'rejected the administrator password' in rejected.msg"
+          - rejected.phase == 'onboarding'
+          - rejected.changed
+          - rejected.partial
+          - rejected.previous_state == 'uninitialized'
+          - rejected.current_state == 'onboarding_required'
+          - "'schema_created' in rejected.actions"
+          - after_failure.current_state == 'onboarding_required'
+
+    - name: Check mode on the half-initialized instance plans the whole onboarding
+      jmz.koha.initialize:
+      args: "{{ spec | combine({'instance': koha_second_instance}) }}"
+      check_mode: true
+      register: resume_check
+    - name: Nothing was created by that check
+      ansible.builtin.command: >-
+        mysql --protocol=socket --batch --skip-column-names koha_{{ koha_second_instance }}
+        --execute "SELECT (SELECT COUNT(*) FROM branches), (SELECT COUNT(*) FROM categories), (SELECT COUNT(*) FROM borrowers)"
+      register: second_rows
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - resume_check.changed
+          - resume_check.planned
+          - not resume_check.partial
+          - "'library_created:CENTRAL' in resume_check.actions"
+          - "'administrator_created' in resume_check.actions"
+          - second_rows.stdout | trim == '0\t0\t0'
+
+    - name: Resume with a valid password
+      jmz.koha.initialize:
+      args: "{{ spec | combine({'instance': koha_second_instance}) }}"
+      register: resumed
+    - ansible.builtin.assert:
+        that:
+          - resumed.changed
+          - resumed.previous_state == 'onboarding_required'
+          - resumed.current_state == 'initialized'
+          - "'library_created:CENTRAL' in resumed.actions"
+          - "'administrator_created' in resumed.actions"
+          - "'schema_created' not in resumed.actions"
+
+    # --- phase 1: a helper killed by the timeout must not be reported as "no changes"
+    - name: Create a third instance for the timeout case
+      jmz.koha.instance:
+        instance: third
+        db_mode: create
+        marcflavor: marc21
+        zebralang: en
+    - name: Initialize with a timeout shorter than the schema load
+      jmz.koha.initialize:
+      args: "{{ spec | combine({'instance': 'third', 'timeout': koha_timeout_seconds}) }}"
+      register: timed_out
+      ignore_errors: true
+    - name: Koha as the failed run left it
+      jmz.koha.initialize:
+        instance: third
+        state: inspect
+      register: after_timeout
+    - ansible.builtin.assert:
+        that:
+          - timed_out is failed
+          - "'límite' in timed_out.msg"
+          - timed_out.previous_state == 'uninitialized'
+          - timed_out.current_state != 'uninitialized'
+          - timed_out.current_state == after_timeout.current_state
+          - timed_out.changed
+          - timed_out.partial
+          - password not in (timed_out | dict2items | rejectattr('key', 'equalto', 'item') | list | to_json)
+        fail_msg: >-
+          The helper finished before the {{ koha_timeout_seconds }}s timeout, so this case did not run;
+          lower koha_timeout_seconds in molecule.yml. Result: {{ timed_out.msg | default('') }}
+
+    # --- check mode before the installer ran can only plan, and says so
+    - name: Create a fourth, untouched instance
+      jmz.koha.instance:
+        instance: fourth
+        db_mode: create
+        marcflavor: marc21
+        zebralang: en
+    - name: Check mode on an uninitialized instance
+      jmz.koha.initialize:
+      args: "{{ spec | combine({'instance': 'fourth'}) }}"
+      check_mode: true
+      register: fresh_check
+    - name: The database is still empty
+      jmz.koha.initialize:
+        instance: fourth
+        state: inspect
+      register: fresh_after
+    - ansible.builtin.assert:
+        that:
+          - fresh_check.changed
+          - fresh_check.planned
+          - fresh_check.partial
+          - "'schema_created' in fresh_check.actions"
+          - fresh_check.previous_state == 'uninitialized'
+          - fresh_after.current_state == 'uninitialized'
+          - fresh_after.state_info.tables == 0
+
+    # --- input validation happens before anything touches Koha
+    - name: Declarations Ansible or the module refuse up front
+      jmz.koha.initialize:
+      args: "{{ spec | combine(item.override) }}"
+      loop:
+        - {name: missing onboarding, pattern: es obligatorio,
+           override: {library: null, patron_categories: null, administrator: null, item_types: null, circulation_rules: null}}
+        - {name: duplicate category, pattern: códigos repetidos,
+           override: {patron_categories: "{{ koha_init.patron_categories + [koha_init.patron_categories[0]] }}"}}
+        - {name: duplicate rule scope, pattern: repite el ámbito,
+           override: {circulation_rules: "{{ koha_init.circulation_rules * 2 }}"}}
+        - {name: non scalar rule, pattern: debe ser un texto,
+           override: {circulation_rules: [{library: CENTRAL, category: ADULT, item_type: BOOK, rules: {issuelength: [14]}}]}}
+        - {name: legacy alias, pattern: Unsupported parameters,
+           override: {marc_flavour: MARC21}}
+      loop_control:
+        label: "{{ item.name }}"
+      register: refused
+      ignore_errors: true
+    - ansible.builtin.assert:
+        that:
+          - item is failed
+          - item.item.pattern in item.msg
+          - not item.changed
+        quiet: true
+      loop: "{{ refused.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # --- named timezones: initialize no longer loads MariaDB's tables, mariadb_timezone does
+    - name: Create an instance with a named timezone
+      jmz.koha.instance:
+        instance: fifth
+        db_mode: create
+        marcflavor: marc21
+        zebralang: en
+        timezone: America/Argentina/Buenos_Aires
+    - name: Koha cannot connect while the timezone tables are missing
+      jmz.koha.initialize:
+        instance: fifth
+        state: inspect
+      register: without_tables
+      ignore_errors: true
+    - name: Check mode of the timezone module reports the load without doing it
+      jmz.koha.mariadb_timezone:
+        timezone: America/Argentina/Buenos_Aires
+      check_mode: true
+      register: timezone_check
+    - name: MariaDB uptime before loading the tables
+      ansible.builtin.command: mariadb --protocol=socket --batch --skip-column-names --execute "SHOW GLOBAL STATUS LIKE 'Uptime'"
+      register: uptime_before
+      changed_when: false
+    - name: Load the timezone tables
+      jmz.koha.mariadb_timezone:
+        timezone: America/Argentina/Buenos_Aires
+      register: timezone_loaded
+    - name: MariaDB uptime after loading the tables
+      ansible.builtin.command: mariadb --protocol=socket --batch --skip-column-names --execute "SHOW GLOBAL STATUS LIKE 'Uptime'"
+      register: uptime_after
+      changed_when: false
+    - name: Loading them again changes nothing
+      jmz.koha.mariadb_timezone:
+        timezone: America/Argentina/Buenos_Aires
+      register: timezone_again
+    - name: Koha connects now
+      jmz.koha.initialize:
+        instance: fifth
+        state: inspect
+      register: with_tables
+    - ansible.builtin.assert:
+        that:
+          - without_tables is failed
+          - "'jmz.koha.mariadb_timezone' in without_tables.msg"
+          - timezone_check.changed
+          - timezone_loaded.changed
+          - (uptime_after.stdout.split()[1] | int) >= (uptime_before.stdout.split()[1] | int)
+          - not timezone_again.changed
+          - with_tables.current_state == 'uninitialized'
