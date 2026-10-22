@@ -1,0 +1,15 @@
+---
+- name: Create and initialize the instance (also run by the idempotence check)
+  hosts: all
+  become: true
+  tasks:
+    - name: Create instance
+      jmz.koha.instance:
+        instance: "{{ koha_instance }}"
+        db_mode: create
+        marcflavor: marc21
+        zebralang: en
+
+    - name: Initialize Koha and complete onboarding
+      jmz.koha.initialize:
+      args: "{{ {'instance': koha_instance} | combine(koha_init) }}"
