@@ -17,6 +17,7 @@ del módulo antes de validarse. Los textos libres conservan su contenido.
 | [`jmz.koha.initialize`](initialize/README.md) | Inicializar datos de Koha y completar el onboarding inicial. | [Guía del módulo](initialize/README.md) | [Escenarios](initialize/examples.md) |
 | [`jmz.koha.localization`](localization/README.md) | Configurar idiomas y selectores OPAC/Staff. | [Guía del módulo](localization/README.md) | [Escenarios](localization/examples.md) |
 | [`jmz.koha.smtp`](smtp/README.md) | Agregar un servidor SMTP y establecerlo como predeterminado. | [Guía del módulo](smtp/README.md) | [Escenarios](smtp/examples.md) |
+| [`jmz.koha.user`](user/README.md) | Crear un usuario y establecer sus permisos operativos (sin superlibrarian). | [Guía del módulo](user/README.md) | [Escenarios](user/examples.md) |
 | [`jmz.koha.worker`](worker/README.md) | Administrar workers de background jobs. | [Guía del módulo](worker/README.md) | [Escenarios](worker/examples.md) |
 | [`jmz.koha.zebra`](zebra/README.md) | Administrar el servicio Zebra de una instancia. | [Guía del módulo](zebra/README.md) | [Escenarios](zebra/examples.md) |
 | [`jmz.koha.zebra_indexer`](zebra_indexer/README.md) | Administrar el daemon de indexación incremental Zebra de una instancia. | [Guía del módulo](zebra_indexer/README.md) | [Escenarios](zebra_indexer/examples.md) |

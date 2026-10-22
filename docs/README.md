@@ -33,6 +33,7 @@ Consulte el [índice de módulos](modules/README.md) para ver su interfaz, compo
 | [`jmz.koha.initialize`](modules/initialize/README.md) | Inicializar la base Koha y el onboarding sin el instalador web. | [Guía](modules/initialize/README.md) | [Escenarios](modules/initialize/examples.md) |
 | [`jmz.koha.mariadb_timezone`](modules/mariadb_timezone/README.md) | Cargar las tablas de zonas horarias de un MariaDB local. | [Guía](modules/mariadb_timezone/README.md) | [Escenarios](modules/mariadb_timezone/examples.md) |
 | [`jmz.koha.smtp`](modules/smtp/README.md) | Agregar un servidor SMTP y establecerlo como predeterminado. | [Guía](modules/smtp/README.md) | [Escenarios](modules/smtp/examples.md) |
+| [`jmz.koha.user`](modules/user/README.md) | Crear un usuario y establecer sus permisos operativos. | [Guía](modules/user/README.md) | [Escenarios](modules/user/examples.md) |
 | [`jmz.koha.worker`](modules/worker/README.md) | Administrar workers de background jobs. | [Guía](modules/worker/README.md) | [Escenarios](modules/worker/examples.md) |
 | [`jmz.koha.zebra`](modules/zebra/README.md) | Administrar el servicio Zebra de una instancia. | [Guía](modules/zebra/README.md) | [Escenarios](modules/zebra/examples.md) |
 | [`jmz.koha.zebra_indexer`](modules/zebra_indexer/README.md) | Administrar el daemon de indexación incremental Zebra de una instancia. | [Guía](modules/zebra_indexer/README.md) | [Escenarios](modules/zebra_indexer/examples.md) |
