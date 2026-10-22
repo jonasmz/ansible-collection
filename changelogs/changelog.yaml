@@ -25,6 +25,8 @@ releases:
         - Add the services_lifecycle molecule scenario that runs plack, zebra, zebra_indexer, worker and zebra_rebuild against real Koha.
         - smtp holds a per-instance lock while it writes (smtp_servers has no unique index on name), reports changed when Koha was already committed and a later check failed, shows a password change in after.password as "modificada" without revealing it, and returns Koha errors in Spanish without the helper path.
         - Add the smtp_lifecycle molecule scenario that runs smtp against real Koha, including get_default, the lock and koha-conf.xml staying untouched.
+        - Add the user module to create a Koha user and set its operational permissions exactly (never superlibrarian, and it refuses to change an existing superlibrarian), validating module and subpermission names against Koha.
+        - Add the user_permissions molecule scenario that runs user against real Koha.
       breaking_changes:
         - translate no longer accepts dev_instance and no longer returns scope or dev_instance; it never worked on a real koha-conf.xml.
         - initialize no longer loads MariaDB timezone tables or restarts MariaDB (that code never matched a real koha-conf.xml); run mariadb_timezone first.

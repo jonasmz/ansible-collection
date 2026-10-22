@@ -1,0 +1,326 @@
+---
+# Fixes the behavior of jmz.koha.user against real Koha.
+- name: Verify user
+  hosts: all
+  become: true
+  vars:
+    db: "koha_{{ koha_instance }}"
+    base:
+      instance: "{{ koha_instance }}"
+      username: mperez
+      password: Operativo-1234
+      firstname: María
+      surname: Pérez
+      library: CENTRAL
+      category: STAFF
+      email: mperez@example.test
+      permissions:
+        catalogue: true
+        circulate: [circulate_remaining_permissions, force_checkout]
+        reserveforothers: true
+    # Full day-to-day operation, including managing other users and their permissions,
+    # and none of the technical site configuration.
+    moderator_permissions:
+      catalogue: true
+      circulate: true
+      borrowers: true
+      reserveforothers: true
+      permissions: true
+      staffaccess: true
+      editcatalogue: true
+      updatecharges: true
+      acquisition: true
+      suggestions: true
+      editauthorities: true
+      serials: true
+      coursereserves: true
+      lists: true
+      clubs: true
+      ill: true
+      stockrotation: true
+      cash_management: true
+      problem_reports: true
+      recalls: true
+      erm: true
+      loggedinlibrary: true
+      preservation: true
+      reports: [execute_reports]
+      parameters:
+        - manage_libraries
+        - manage_patron_categories
+        - manage_itemtypes
+        - manage_circ_rules
+        - manage_auth_values
+        - manage_cities
+        - manage_patron_attributes
+        - manage_accounts
+        - manage_transfers
+        - manage_item_circ_alerts
+        - manage_marc_frameworks
+        - manage_classifications
+        - manage_matching_rules
+        - manage_patron_restrictions
+        - manage_cash_registers
+        - manage_curbside_pickups
+      tools:
+        - edit_calendar
+        - edit_notices
+        - edit_notice_status_triggers
+        - label_creator
+        - inventory
+        - stage_marc_import
+        - manage_staged_marc
+        - export_catalog
+        - import_patrons
+        - edit_patrons
+        - items_batchmod
+        - items_batchdel
+        - records_batchmod
+        - records_batchdel
+        - manage_patron_lists
+        - manage_csv_profiles
+        - batch_extend_due_dates
+        - batch_modify_holds
+        - batch_upload_patron_images
+        - delete_anonymize_patrons
+        - rotating_collections
+        - moderate_comments
+        - moderate_tags
+        - upload_local_cover_images
+  tasks:
+    - name: Start from a known state so verify can be repeated against the same container
+      ansible.builtin.command: mysql {{ db }} -e "DELETE FROM borrowers WHERE userid IN ('mperez', 'otra', 'moderador')"
+      changed_when: false
+    - name: Script that prints a patron's effective permissions and superlibrarian status
+      ansible.builtin.copy:
+        dest: /usr/local/share/user-perms.pl
+        mode: "0644"
+        content: |
+          use JSON::PP;
+          use Koha::Patrons;
+          my $p = Koha::Patrons->search({ userid => $ARGV[0] })->single;
+          my $perms = $p->permissions;
+          print JSON::PP->new->canonical->encode({
+              super => $p->is_superlibrarian ? 1 : 0,
+              catalogue => $p->has_permission({ catalogue => 1 }) ? 1 : 0,
+              circulate_remaining => $p->has_permission({ circulate => 'circulate_remaining_permissions' }) ? 1 : 0,
+              tools => $p->has_permission({ tools => 'edit_calendar' }) ? 1 : 0,
+          }), "\n";
+
+    - name: Check mode creates nothing
+      jmz.koha.user: "{{ base }}"
+      check_mode: true
+      register: check
+    - name: No user exists yet
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT COUNT(*) FROM borrowers WHERE userid='mperez'"
+      register: count
+      changed_when: false
+    - ansible.builtin.assert:
+        that: [check.changed, check.created, count.stdout == '0', check.borrowernumber is none]
+
+    - name: Create the user
+      jmz.koha.user: "{{ base }}"
+      register: create
+      diff: true
+    - name: Repeat
+      jmz.koha.user: "{{ base }}"
+      register: again
+    - name: Koha sees an operational user that is not a superlibrarian
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/user-perms.pl mperez"
+      register: perms
+      changed_when: false
+    - name: Raw flags and subpermissions
+      ansible.builtin.command: >-
+        mysql -N {{ db }} -e "SELECT flags FROM borrowers WHERE userid='mperez';
+        SELECT p.code FROM user_permissions p JOIN borrowers b USING (borrowernumber) WHERE b.userid='mperez' ORDER BY p.code"
+      register: raw
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - create.changed and create.created and not create.password_changed
+          - create.after.password == true
+          - not again.changed
+          - "(perms.stdout | from_json) == {'super': 0, 'catalogue': 1, 'circulate_remaining': 1, 'tools': 0}"
+          # catalogue (bit 2) + reserveforothers (bit 6), no bit 0
+          - raw.stdout_lines[0] | int == 68
+          - raw.stdout_lines[1:] == ['circulate_remaining_permissions', 'force_checkout']
+          - "'Operativo-1234' not in (create | to_json)"
+          - "'Operativo-1234' not in (again | to_json)"
+
+    - name: Script that checks a password against the stored hash
+      ansible.builtin.copy:
+        dest: /usr/local/share/user-login.pl
+        mode: "0644"
+        content: |
+          use C4::Auth;
+          use Koha::Patrons;
+          my $p = Koha::Patrons->search({ userid => $ARGV[0] })->single;
+          print C4::Auth::checkpw_hash($ARGV[1], $p->password) ? "ok" : "bad";
+    - name: Can authenticate with the password
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/user-login.pl mperez Operativo-1234"
+      register: login
+      changed_when: false
+      no_log: true
+    - ansible.builtin.assert:
+        that: [login.stdout == 'ok']
+
+    - name: Permissions are exact; the rest are revoked
+      jmz.koha.user: "{{ base | combine({'permissions': {'catalogue': true, 'tools': ['edit_calendar']}}) }}"
+      register: narrowed
+    - name: Permissions after narrowing
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/user-perms.pl mperez"
+      register: perms2
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - narrowed.changed and narrowed.permissions_changed and not narrowed.updated and not narrowed.password_changed
+          - narrowed.before.permissions.circulate == ['circulate_remaining_permissions', 'force_checkout']
+          - "narrowed.after.permissions == {'catalogue': 1, 'tools': ['edit_calendar']}"
+          - "(perms2.stdout | from_json) == {'super': 0, 'catalogue': 1, 'circulate_remaining': 0, 'tools': 1}"
+
+    - name: Profile and password change, reported without revealing the password
+      jmz.koha.user: "{{ base | combine({'password': 'Nueva-5678', 'surname': 'Gómez', 'email': 'mg@example.test', 'permissions': {'catalogue': true, 'tools': ['edit_calendar']}}) }}"
+      register: profile
+    - ansible.builtin.assert:
+        that:
+          - profile.changed and profile.updated and profile.password_changed and not profile.permissions_changed
+          - profile.after.password == 'modificada'
+          - profile.after.surname == 'Gómez'
+          - "'Nueva-5678' not in (profile | to_json)"
+    - name: Optional fields omitted leave the stored ones alone
+      jmz.koha.user:
+        instance: "{{ koha_instance }}"
+        username: mperez
+        password: Nueva-5678
+        surname: Gómez
+        library: CENTRAL
+        category: STAFF
+        permissions: {catalogue: true, tools: [edit_calendar]}
+      register: omitted
+    - ansible.builtin.assert:
+        that: [not omitted.changed]
+
+    - name: Whole-module permission for a second user, with false entries ignored
+      jmz.koha.user: "{{ base | combine({'username': 'otra', 'permissions': {'circulate': true, 'tools': false}}) }}"
+      register: other
+    - name: Her permissions
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/user-perms.pl otra"
+      register: perms3
+      changed_when: false
+    - name: Her flags are the whole circulate module (bit 1) with no subpermission rows
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT flags FROM borrowers WHERE userid='otra'"
+      register: flags_other
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - "other.created and other.after.permissions == {'circulate': 1}"
+          - flags_other.stdout == '2'
+
+    - name: No permissions at all is a valid operational account
+      jmz.koha.user: "{{ base | combine({'username': 'otra', 'permissions': {}}) }}"
+      register: emptied
+    - ansible.builtin.assert:
+        that:
+          - emptied.changed and emptied.permissions_changed
+          - "emptied.after.permissions == {}"
+
+    - name: Script that checks technical permissions
+      ansible.builtin.copy:
+        dest: /usr/local/share/user-technical.pl
+        mode: "0644"
+        content: |
+          use JSON::PP;
+          use Koha::Patrons;
+          my $p = Koha::Patrons->search({ userid => 'moderador' })->single;
+          my %h = (super => $p->is_superlibrarian ? 1 : 0);
+          $h{$_} = $p->has_permission({ parameters => $_ }) ? 1 : 0
+              for qw(manage_libraries manage_circ_rules manage_sysprefs manage_smtp_servers manage_background_jobs);
+          $h{plugins} = $p->has_permission({ plugins => '*' }) ? 1 : 0;
+          $h{sip2} = $p->has_permission({ sip2 => 1 }) ? 1 : 0;
+          $h{permissions} = $p->has_permission({ permissions => 1 }) ? 1 : 0;
+          $h{staffaccess} = $p->has_permission({ staffaccess => 1 }) ? 1 : 0;
+          $h{logs} = $p->has_permission({ tools => 'view_system_logs' }) ? 1 : 0;
+          $h{sql_reports} = $p->has_permission({ reports => 'create_reports' }) ? 1 : 0;
+          $h{items_batchmod} = $p->has_permission({ tools => 'items_batchmod' }) ? 1 : 0;
+          $h{place_holds} = $p->has_permission({ reserveforothers => 1 }) ? 1 : 0;
+          print JSON::PP->new->canonical->encode(\%h), "\n";
+    - name: Moderator with full day-to-day operation and user management
+      jmz.koha.user: "{{ base | combine({'username': 'moderador', 'permissions': moderator_permissions}) }}"
+      register: moderator
+    - name: Moderator again
+      jmz.koha.user: "{{ base | combine({'username': 'moderador', 'permissions': moderator_permissions}) }}"
+      register: moderator_again
+    - name: Moderator effective permissions
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/user-technical.pl"
+      register: technical
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - moderator.created and not moderator_again.changed
+          - "(technical.stdout | from_json) == {'super': 0, 'manage_libraries': 1, 'manage_circ_rules': 1, 'manage_sysprefs': 0, 'manage_smtp_servers': 0, 'manage_background_jobs': 0, 'plugins': 0, 'sip2': 0, 'permissions': 1, 'staffaccess': 1, 'logs': 0, 'sql_reports': 0, 'items_batchmod': 1, 'place_holds': 1}"
+
+    - name: Rejected before touching Koha
+      jmz.koha.user: "{{ base | combine({'permissions': {'superlibrarian': true}}) }}"
+      register: grant_super
+      ignore_errors: true
+    - name: Unknown module
+      jmz.koha.user: "{{ base | combine({'permissions': {'nope': true}}) }}"
+      register: unknown_module
+      ignore_errors: true
+    - name: Unknown subpermission
+      jmz.koha.user: "{{ base | combine({'permissions': {'tools': ['nope']}}) }}"
+      register: unknown_sub
+      ignore_errors: true
+    - name: Unknown library
+      jmz.koha.user: "{{ base | combine({'library': 'NOPE'}) }}"
+      register: unknown_library
+      ignore_errors: true
+    - name: Weak password
+      jmz.koha.user: "{{ base | combine({'username': 'otra', 'password': 'x'}) }}"
+      register: weak
+      ignore_errors: true
+      no_log: true
+    - ansible.builtin.assert:
+        that:
+          - grant_super.failed and 'superlibrarian' in grant_super.msg
+          - unknown_module.failed and 'nope' in unknown_module.msg
+          - unknown_sub.failed and 'nope' in unknown_sub.msg
+          - unknown_library.failed and 'NOPE' in unknown_library.msg
+          - weak.failed
+
+    - name: The administrator is a superlibrarian and is left alone
+      jmz.koha.user: "{{ base | combine({'username': koha_init.administrator.username}) }}"
+      register: admin
+      ignore_errors: true
+    - name: Administrator flags
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT flags FROM borrowers WHERE userid='{{ koha_init.administrator.username }}'"
+      register: admin_flags
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - admin.failed and not admin.changed and 'superlibrarian' in admin.msg
+          - admin_flags.stdout == '1'
+
+    - name: A concurrent run is refused while the lock is held
+      ansible.builtin.shell: |
+        exec 9>/run/lock/ansible-koha-user-{{ koha_instance }}.lock
+        flock -n 9 || exit 1
+        sleep 45
+      async: 60
+      poll: 0
+      register: holder
+    - name: Wait for the lock holder to start
+      ansible.builtin.pause: {seconds: 2}
+    - name: Declaring a user meanwhile waits and then fails
+      jmz.koha.user: "{{ base | combine({'username': 'otra'}) }}"
+      register: locked
+      ignore_errors: true
+    - name: Wait for the holder to finish
+      ansible.builtin.async_status: {jid: "{{ holder.ansible_job_id }}"}
+      register: holder_done
+      until: holder_done.finished
+      retries: 30
+      delay: 3
+    - ansible.builtin.assert:
+        that:
+          - "'otra ejecución' in locked.msg"
