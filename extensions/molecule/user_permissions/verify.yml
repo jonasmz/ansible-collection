@@ -200,6 +200,18 @@
     - ansible.builtin.assert:
         that: [not omitted.changed]
 
+    - name: A card number can be added to an existing user and repeated
+      jmz.koha.user: "{{ base | combine({'password': 'Nueva-5678', 'surname': 'Gómez', 'email': 'mg@example.test', 'cardnumber': 'MP0001', 'permissions': {'catalogue': true, 'tools': ['edit_calendar']}}) }}"
+      register: card
+    - name: Repeating with the same card number does not trip Koha's uniqueness check
+      jmz.koha.user: "{{ base | combine({'password': 'Nueva-5678', 'surname': 'Gómez', 'email': 'mg@example.test', 'cardnumber': 'MP0001', 'permissions': {'catalogue': true, 'tools': ['edit_calendar']}}) }}"
+      register: card_again
+    - ansible.builtin.assert:
+        that:
+          - card.changed and card.updated
+          - not card_again.changed
+          - card_again.after.cardnumber == 'MP0001'
+
     - name: Whole-module permission for a second user, with false entries ignored
       jmz.koha.user: "{{ base | combine({'username': 'otra', 'permissions': {'circulate': true, 'tools': false}}) }}"
       register: other

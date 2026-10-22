@@ -27,6 +27,10 @@ releases:
         - Add the smtp_lifecycle molecule scenario that runs smtp against real Koha, including get_default, the lock and koha-conf.xml staying untouched.
         - Add the user module to create a Koha user and set its operational permissions exactly (never superlibrarian, and it refuses to change an existing superlibrarian), validating module and subpermission names against Koha.
         - Add the user_permissions molecule scenario that runs user against real Koha.
+        - Add the superlibrarian module to restore the administrator account (privilege, identity, password, expiry, lock, restrictions, or recreate it) and warn about other superlibrarians without touching them.
+        - superlibrarian gains unexpected=lock to administratively lock the other superlibrarians (keeping their privilege) and to unlock only the declared ones, returning locked_superlibrarians and restored_superlibrarians.
+        - Add the superlibrarian_recovery molecule scenario that sabotages the administrator account and checks the repair against real Koha.
+        - user only validates a card number when it is new or changed (an existing user's own card number used to be rejected as a duplicate).
       breaking_changes:
         - translate no longer accepts dev_instance and no longer returns scope or dev_instance; it never worked on a real koha-conf.xml.
         - initialize no longer loads MariaDB timezone tables or restarts MariaDB (that code never matched a real koha-conf.xml); run mariadb_timezone first.

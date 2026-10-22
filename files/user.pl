@@ -119,14 +119,16 @@ sub run {
         or die "La categoría '$desired->{category}' no existe\n";
     die "El correo no es válido para Koha\n"
         if defined($desired->{email}) && length($desired->{email}) && !Koha::Email->is_valid($desired->{email});
-    if (defined $desired->{cardnumber}) {
-        require Koha::Policy::Patrons::Cardnumber;
-        die "Koha rechazó el número de tarjeta\n" unless Koha::Policy::Patrons::Cardnumber->is_valid($desired->{cardnumber});
-    }
 
     my @matches = Koha::Patrons->search({ userid => $desired->{username} })->as_list;
     my $patron = $matches[0];
     my $before = $patron ? snapshot($patron) : undef;
+
+    # The card number's own account would fail the uniqueness check, so only a new or changed one is validated.
+    if (defined $desired->{cardnumber} && (!$before || ($before->{cardnumber} // '') ne $desired->{cardnumber})) {
+        require Koha::Policy::Patrons::Cardnumber;
+        die "Koha rechazó el número de tarjeta\n" unless Koha::Policy::Patrons::Cardnumber->is_valid($desired->{cardnumber});
+    }
     if ($patron) {
         die "El usuario '$desired->{username}' es superlibrarian; este módulo no cambia sus privilegios\n"
             if $patron->is_superlibrarian;

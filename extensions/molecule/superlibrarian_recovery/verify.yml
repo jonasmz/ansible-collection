@@ -1,0 +1,363 @@
+---
+# Fixes the behavior of jmz.koha.superlibrarian against real Koha.
+- name: Verify superlibrarian
+  hosts: all
+  become: true
+  vars:
+    db: "koha_{{ koha_instance }}"
+    admin: "{{ koha_init.administrator }}"
+    base:
+      instance: "{{ koha_instance }}"
+      username: "{{ koha_init.administrator.username }}"
+      password: "{{ koha_init.administrator.password }}"
+      firstname: "{{ koha_init.administrator.firstname }}"
+      surname: "{{ koha_init.administrator.surname }}"
+      cardnumber: "{{ koha_init.administrator.cardnumber }}"
+      email: "{{ koha_init.administrator.email }}"
+      library: "{{ koha_init.administrator.library }}"
+      category: "{{ koha_init.administrator.category }}"
+    # The documented loop: every account lists all the others in allowed.
+    superlibrarians:
+      - {username: "{{ koha_init.administrator.username }}", surname: Koha, password: "{{ koha_init.administrator.password }}"}
+      - {username: soporte, surname: Soporte, password: Soporte-12345}
+      - {username: superuser3, surname: Tres, password: Super3-12345}
+  tasks:
+    - name: Start from a known state so verify can be repeated against the same container
+      ansible.builtin.command: mysql {{ db }} -e "DELETE FROM borrowers WHERE userid IN ('intruso', 'otro', 'soporte', 'superuser3')"
+      changed_when: false
+    - name: Script that checks a password against the stored hash
+      ansible.builtin.copy:
+        dest: /usr/local/share/superlibrarian-login.pl
+        mode: "0644"
+        content: |
+          use C4::Auth;
+          use Koha::Patrons;
+          my $p = Koha::Patrons->search({ userid => $ARGV[0] })->single;
+          print $p && C4::Auth::checkpw_hash($ARGV[1], $p->password) ? "ok" : "bad";
+    - name: Script that prints the account state as Koha sees it
+      ansible.builtin.copy:
+        dest: /usr/local/share/superlibrarian-state.pl
+        mode: "0644"
+        content: |
+          use JSON::PP;
+          use Koha::Patrons;
+          my $p = Koha::Patrons->search({ userid => $ARGV[0] })->single;
+          print JSON::PP->new->canonical->encode({
+              super => $p->is_superlibrarian ? 1 : 0,
+              expired => $p->is_expired ? 1 : 0,
+              locked => $p->account_locked ? 1 : 0,
+              restrictions => $p->restrictions->count + 0,
+              surname => $p->surname,
+          }), "\n";
+
+    - name: The account the installer created already matches
+      jmz.koha.superlibrarian: "{{ base }}"
+      register: untouched
+    - ansible.builtin.assert:
+        that:
+          - not untouched.changed
+          - untouched.unexpected_superlibrarians == []
+          - "'Molecule-Pass-1234' not in (untouched | to_json)"
+
+    - name: Sabotage the account as someone with staff access could
+      ansible.builtin.shell: |
+        set -e
+        mysql {{ db }} -e "UPDATE borrowers SET flags = 0, dateexpiry = '2000-01-01', login_attempts = -1, surname = 'Hackeado', password = 'cambiada' WHERE userid = '{{ admin.username }}'"
+        mysql {{ db }} -e "INSERT INTO borrower_debarments (borrowernumber, type, comment) SELECT borrowernumber, 'MANUAL', 'prueba' FROM borrowers WHERE userid = '{{ admin.username }}'"
+        mysql {{ db }} -e "INSERT INTO borrowers (surname, address, city, branchcode, categorycode, userid, flags) VALUES ('Intruso', '', '', '{{ admin.library }}', '{{ admin.category }}', 'intruso', 1)"
+      changed_when: false
+    - name: Koha confirms the damage
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-state.pl {{ admin.username }}"
+      register: damaged
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - (damaged.stdout | from_json).super == 0
+          - (damaged.stdout | from_json).expired == 1
+          - (damaged.stdout | from_json).locked == 1
+          - (damaged.stdout | from_json).restrictions == 1
+
+    - name: Check mode reports the repair and writes nothing
+      jmz.koha.superlibrarian: "{{ base }}"
+      check_mode: true
+      register: check
+    - name: Still damaged
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-state.pl {{ admin.username }}"
+      register: still_damaged
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - check.changed and check.superlibrarian_restored and check.password_changed and check.expiry_renewed
+          - check.unlocked and check.updated and check.restrictions_removed
+          - (still_damaged.stdout | from_json).super == 0
+
+    - name: Restore the account
+      jmz.koha.superlibrarian: "{{ base }}"
+      register: restored
+      diff: true
+    - name: Repeat
+      jmz.koha.superlibrarian: "{{ base }}"
+      register: again
+    - name: Koha sees the restored account
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-state.pl {{ admin.username }}"
+      register: fixed
+      changed_when: false
+    - name: The password works again
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-login.pl {{ admin.username }} {{ admin.password }}"
+      register: login
+      changed_when: false
+      no_log: true
+    - ansible.builtin.assert:
+        that:
+          - restored.changed and restored.superlibrarian_restored and restored.password_changed
+          - restored.expiry_renewed and restored.unlocked and restored.updated and restored.restrictions_removed
+          - not restored.created
+          - restored.after.password == 'modificada'
+          - restored.after.superlibrarian == true
+          - "'Molecule-Pass-1234' not in (restored | to_json)"
+          - not again.changed
+          - "(fixed.stdout | from_json) == {'super': 1, 'expired': 0, 'locked': 0, 'restrictions': 0, 'surname': admin.surname}"
+          - login.stdout == 'ok'
+
+    - name: The other superlibrarian is reported but never touched
+      ansible.builtin.assert:
+        that:
+          - restored.unexpected_superlibrarians == ['intruso']
+          - restored.warnings | select('search', 'intruso') | list | length == 1
+    - name: Intruder flags
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT flags FROM borrowers WHERE userid = 'intruso'"
+      register: intruder
+      changed_when: false
+    - name: Declaring the other superlibrarian as allowed silences the warning
+      jmz.koha.superlibrarian: "{{ base | combine({'allowed': ['intruso']}) }}"
+      register: allowed
+    - ansible.builtin.assert:
+        that:
+          - intruder.stdout == '1'
+          - allowed.unexpected_superlibrarians == []
+          - allowed.warnings | default([]) | select('search', 'intruso') | list | length == 0
+          - not allowed.changed
+
+    - name: By default other superlibrarians are never locked
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT IFNULL(login_attempts, 0) FROM borrowers WHERE userid = 'intruso'"
+      register: warn_only
+      changed_when: false
+    - ansible.builtin.assert:
+        that: [warn_only.stdout == '0']
+
+    - name: Check mode with unexpected=lock reports who would be locked and writes nothing
+      jmz.koha.superlibrarian: "{{ base | combine({'unexpected': 'lock'}) }}"
+      check_mode: true
+      register: lock_check
+    - name: Not locked yet
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT IFNULL(login_attempts, 0) FROM borrowers WHERE userid = 'intruso'"
+      register: not_locked
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - lock_check.changed
+          - lock_check.locked_superlibrarians == ['intruso']
+          - not_locked.stdout == '0'
+
+    - name: Lock the unexpected superlibrarian
+      jmz.koha.superlibrarian: "{{ base | combine({'unexpected': 'lock'}) }}"
+      register: locked_run
+    - name: Repeat
+      jmz.koha.superlibrarian: "{{ base | combine({'unexpected': 'lock'}) }}"
+      register: locked_again
+    - name: The intruder is locked but keeps its privilege
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT login_attempts, flags FROM borrowers WHERE userid = 'intruso'"
+      register: intruder_locked
+      changed_when: false
+    - name: Koha sees the lock
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-state.pl intruso"
+      register: intruder_state
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - locked_run.changed and locked_run.locked_superlibrarians == ['intruso']
+          - locked_run.restored_superlibrarians == []
+          - locked_run.unexpected_superlibrarians == ['intruso']
+          - locked_run.warnings | select('search', 'intruso') | list | length == 1
+          - not locked_again.changed and locked_again.locked_superlibrarians == []
+          - intruder_locked.stdout | trim | regex_replace('\s+', ' ') == '-1 1'
+          - (intruder_state.stdout | from_json).locked == 1
+          - not locked_run.unlocked
+
+    - name: A superlibrarian that someone else locked is not unlocked unless declared
+      ansible.builtin.command: >-
+        mysql {{ db }} -e "INSERT INTO borrowers (surname, address, city, branchcode, categorycode, userid, flags, login_attempts)
+        VALUES ('Otro', '', '', '{{ admin.library }}', '{{ admin.category }}', 'otro', 1, -1)"
+      changed_when: false
+    - name: Lock mode again
+      jmz.koha.superlibrarian: "{{ base | combine({'unexpected': 'lock'}) }}"
+      register: other_locked
+    - name: Its lock stays
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT login_attempts FROM borrowers WHERE userid = 'otro'"
+      register: other_attempts
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - not other_locked.changed
+          - other_locked.unexpected_superlibrarians == ['intruso', 'otro']
+          - other_locked.locked_superlibrarians == [] and other_locked.restored_superlibrarians == []
+          - other_attempts.stdout == '-1'
+
+    - name: Declaring the locked superlibrarian restores only that one
+      jmz.koha.superlibrarian: "{{ base | combine({'unexpected': 'lock', 'allowed': ['intruso']}) }}"
+      register: restored_allowed
+    - name: Repeat restoring
+      jmz.koha.superlibrarian: "{{ base | combine({'unexpected': 'lock', 'allowed': ['intruso']}) }}"
+      register: restored_again
+    - name: Attempts of both
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT userid, login_attempts FROM borrowers WHERE userid IN ('intruso', 'otro') ORDER BY userid"
+      register: attempts
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - restored_allowed.changed and restored_allowed.restored_superlibrarians == ['intruso']
+          - restored_allowed.locked_superlibrarians == []
+          - not restored_again.changed
+          - attempts.stdout_lines | map('regex_replace', '\s+', ' ') | list == ['intruso 0', 'otro -1']
+
+    - name: Without unexpected=lock a declared account is left alone even if locked
+      ansible.builtin.command: mysql {{ db }} -e "UPDATE borrowers SET login_attempts = -1 WHERE userid = 'intruso'"
+      changed_when: false
+    - name: Warn mode
+      jmz.koha.superlibrarian: "{{ base | combine({'allowed': ['intruso']}) }}"
+      register: warn_mode
+    - name: Still locked
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT login_attempts FROM borrowers WHERE userid = 'intruso'"
+      register: still_locked
+      changed_when: false
+    - ansible.builtin.assert:
+        that: [not warn_mode.changed, still_locked.stdout == '-1']
+    - name: Unlock it again for the steps below
+      ansible.builtin.command: mysql {{ db }} -e "UPDATE borrowers SET login_attempts = 0 WHERE userid = 'intruso'"
+      changed_when: false
+
+    - name: Several declared accounts, one call per account with the others in allowed
+      jmz.koha.superlibrarian:
+        instance: "{{ koha_instance }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        surname: "{{ item.surname }}"
+        library: "{{ admin.library }}"
+        category: "{{ admin.category }}"
+        allowed: "{{ superlibrarians | map(attribute='username') | reject('equalto', item.username) | list }}"
+        unexpected: lock
+      loop: "{{ superlibrarians }}"
+      loop_control: {label: "{{ item.username }}"}
+      register: trio_first
+      no_log: true
+    - name: Repeat the loop
+      jmz.koha.superlibrarian:
+        instance: "{{ koha_instance }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        surname: "{{ item.surname }}"
+        library: "{{ admin.library }}"
+        category: "{{ admin.category }}"
+        allowed: "{{ superlibrarians | map(attribute='username') | reject('equalto', item.username) | list }}"
+        unexpected: lock
+      loop: "{{ superlibrarians }}"
+      loop_control: {label: "{{ item.username }}"}
+      register: trio_again
+      no_log: true
+    - ansible.builtin.assert:
+        that:
+          - trio_first.results | map(attribute='created') | list == [false, true, true]
+          - trio_again.results | map(attribute='changed') | list == [false, false, false]
+          - trio_again.results | map(attribute='unexpected_superlibrarians') | list == [['intruso', 'otro'], ['intruso', 'otro'], ['intruso', 'otro']]
+
+    - name: Sabotage only one of the allowed accounts
+      ansible.builtin.command: >-
+        mysql {{ db }} -e "UPDATE borrowers SET flags = 0, dateexpiry = '2000-01-01', password = 'cambiada' WHERE userid = 'soporte'"
+      changed_when: false
+    - name: Loop again
+      jmz.koha.superlibrarian:
+        instance: "{{ koha_instance }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        surname: "{{ item.surname }}"
+        library: "{{ admin.library }}"
+        category: "{{ admin.category }}"
+        allowed: "{{ superlibrarians | map(attribute='username') | reject('equalto', item.username) | list }}"
+        unexpected: lock
+      loop: "{{ superlibrarians }}"
+      loop_control: {label: "{{ item.username }}"}
+      register: trio_repair
+      no_log: true
+    - name: State and login of each account
+      ansible.builtin.shell: |
+        koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-state.pl {{ item.username }}"
+        koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-login.pl {{ item.username }} {{ item.password }}"
+      loop: "{{ superlibrarians }}"
+      loop_control: {label: "{{ item.username }}"}
+      register: trio_state
+      changed_when: false
+      no_log: true
+    - name: Attempts of every account but the managed ones
+      ansible.builtin.command: mysql -N {{ db }} -e "SELECT userid, login_attempts FROM borrowers WHERE userid IN ('intruso', 'otro', 'soporte', 'superuser3') ORDER BY userid"
+      register: trio_attempts
+      changed_when: false
+    - ansible.builtin.assert:
+        that:
+          - trio_repair.results | map(attribute='changed') | list == [false, true, false]
+          - trio_repair.results[1].superlibrarian_restored and trio_repair.results[1].password_changed and trio_repair.results[1].expiry_renewed
+          - trio_repair.results | map(attribute='locked_superlibrarians') | list == [[], [], []]
+          - trio_state.results | map(attribute='stdout_lines') | map('last') | list == ['ok', 'ok', 'ok']
+          - trio_state.results | map(attribute='stdout_lines') | map('first') | map('from_json') | map(attribute='super') | list == [1, 1, 1]
+          - trio_attempts.stdout_lines | map('regex_replace', '\\s+', ' ') | list == ['intruso -1', 'otro -1', 'soporte 0', 'superuser3 0']
+    - name: Remove the extra superlibrarians
+      ansible.builtin.command: mysql {{ db }} -e "DELETE FROM borrowers WHERE userid IN ('soporte', 'superuser3')"
+      changed_when: false
+
+    - name: A deleted account is created again
+      ansible.builtin.command: mysql {{ db }} -e "DELETE FROM borrowers WHERE userid = '{{ admin.username }}'"
+      changed_when: false
+    - name: Recreate
+      jmz.koha.superlibrarian: "{{ base | combine({'allowed': ['intruso']}) }}"
+      register: recreated
+    - name: Recreated account
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-state.pl {{ admin.username }}"
+      register: recreated_state
+      changed_when: false
+    - name: Recreated login
+      ansible.builtin.command: koha-shell {{ koha_instance }} -c "perl /usr/local/share/superlibrarian-login.pl {{ admin.username }} {{ admin.password }}"
+      register: recreated_login
+      changed_when: false
+      no_log: true
+    - ansible.builtin.assert:
+        that:
+          - recreated.changed and recreated.created
+          - (recreated_state.stdout | from_json).super == 1
+          - recreated_login.stdout == 'ok'
+
+    - name: Rejected before touching Koha
+      jmz.koha.superlibrarian: "{{ base | combine({'category': 'ADULT'}) }}"
+      register: bad_category
+      ignore_errors: true
+    - name: Unknown library
+      jmz.koha.superlibrarian: "{{ base | combine({'library': 'NOPE'}) }}"
+      register: bad_library
+      ignore_errors: true
+    - name: Weak password on a damaged account
+      ansible.builtin.command: mysql {{ db }} -e "UPDATE borrowers SET password = 'cambiada' WHERE userid = '{{ admin.username }}'"
+      changed_when: false
+    - name: Declaring a weak password
+      jmz.koha.superlibrarian: "{{ base | combine({'password': 'x'}) }}"
+      register: weak
+      ignore_errors: true
+      no_log: true
+    - ansible.builtin.assert:
+        that:
+          - bad_category.failed and 'tipo S' in bad_category.msg
+          - bad_library.failed and 'NOPE' in bad_library.msg
+          - weak.failed
+
+    - name: Put the password back for repeated verify runs
+      jmz.koha.superlibrarian: "{{ base | combine({'allowed': ['intruso']}) }}"
+    - name: Remove the intruders
+      ansible.builtin.command: mysql {{ db }} -e "DELETE FROM borrowers WHERE userid IN ('intruso', 'otro')"
+      changed_when: false
