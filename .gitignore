@@ -1,3 +1,37 @@
 __pycache__/
 *.py[cod]
 *.tar.gz
+gitignore
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Ansible / build
+*.tar.gz
+*.retry
+tests/output/
+.ansible/
+
+# Molecule
+.molecule/
+
+# Entorno local / editor
+.vscode/
+.idea/
+*.log
+.env
+*.swp
+.DS_Store
+
+# Secretos
+*.pem
+*.key
+vault_pass*
+.vault_pass
